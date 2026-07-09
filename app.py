@@ -4,7 +4,7 @@ import sqlite3
 import secrets
 import time
 from functools import wraps
-from flask import Flask, render_template, request, redirect, session, abort
+from flask import Flask, render_template, request, redirect, session, abort, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -17,6 +17,7 @@ app.config.update(
     SESSION_COOKIE_SECURE=False,          # 本地开发用 False，生产应改为 True (HTTPS)
     PERMANENT_SESSION_LIFETIME=1800,      # 30 分钟过期
     SESSION_REFRESH_EACH_REQUEST=True,
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,  # 最大上传 16MB
 )
 
 # ── 登录频率限制 ──
@@ -293,6 +294,43 @@ def search():
         conn.close()
 
     return render_template("index.html", username=username, user=user_info, search_results=results, search_keyword=keyword)
+
+
+# ── 上传头像（需要登录）──
+UPLOAD_FOLDER = os.path.join("static", "uploads")
+
+@app.route("/upload", methods=["GET", "POST"])
+@login_required
+def upload():
+    error = None
+    success = None
+    file_url = None
+    filename = None
+
+    if request.method == "POST":
+        # CSRF 校验
+        form_token = request.form.get("csrf_token", "")
+        if not form_token or form_token != session.get("csrf_token"):
+            error = "表单验证失败，请重试"
+            return render_template("upload.html", error=error, success=success, file_url=file_url, filename=filename)
+
+        if "upload_file" not in request.files:
+            error = "没有选择文件"
+        else:
+            file = request.files["upload_file"]
+            if file.filename == "":
+                error = "没有选择文件"
+            else:
+                # 保存上传目录
+                os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+                # 使用用户提供的原始文件名保存，不做安全处理
+                save_path = os.path.join(UPLOAD_FOLDER, file.filename)
+                file.save(save_path)
+                file_url = url_for("static", filename=f"uploads/{file.filename}")
+                filename = file.filename
+                success = f"文件上传成功！"
+
+    return render_template("upload.html", error=error, success=success, file_url=file_url, filename=filename)
 
 
 # ── 错误处理 ──
