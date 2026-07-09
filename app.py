@@ -22,25 +22,37 @@ app.config.update(
 
 # ── 登录频率限制 ──
 LOGIN_ATTEMPTS = {}  # IP -> [count, first_attempt_time]
+REGISTER_ATTEMPTS = {}  # IP -> [count, first_attempt_time]
 MAX_LOGIN_ATTEMPTS = 5
+MAX_REGISTER_ATTEMPTS = 3
 LOGIN_LOCKOUT_TIME = 300  # 5 分钟
+REGISTER_LOCKOUT_TIME = 600  # 10 分钟
 
 
 def check_login_rate_limit():
     """检查登录频率，防止暴力破解"""
+    return _check_rate_limit(LOGIN_ATTEMPTS, MAX_LOGIN_ATTEMPTS, LOGIN_LOCKOUT_TIME, "login")
+
+
+def check_register_rate_limit():
+    """检查注册频率，防止批量注册"""
+    return _check_rate_limit(REGISTER_ATTEMPTS, MAX_REGISTER_ATTEMPTS, REGISTER_LOCKOUT_TIME, "register")
+
+
+def _check_rate_limit(attempts_dict, max_attempts, lockout_time, label):
+    """通用频率检查"""
     ip = request.remote_addr or "unknown"
     now = time.time()
-    if ip in LOGIN_ATTEMPTS:
-        count, first_attempt = LOGIN_ATTEMPTS[ip]
-        if now - first_attempt > LOGIN_LOCKOUT_TIME:
-            # 超过锁定时间，重置
-            LOGIN_ATTEMPTS[ip] = [1, now]
+    if ip in attempts_dict:
+        count, first_attempt = attempts_dict[ip]
+        if now - first_attempt > lockout_time:
+            attempts_dict[ip] = [1, now]
             return True
-        if count >= MAX_LOGIN_ATTEMPTS:
+        if count >= max_attempts:
             return False
-        LOGIN_ATTEMPTS[ip][0] += 1
+        attempts_dict[ip][0] += 1
     else:
-        LOGIN_ATTEMPTS[ip] = [1, now]
+        attempts_dict[ip] = [1, now]
     return True
 
 
@@ -184,8 +196,11 @@ def login():
             # 从数据库查询用户（支持哈希密码验证）
             user = get_user_from_db(username)
             if user and check_password_hash(user["password"], password):
+                # 重置 session 防止会话固定攻击
+                session.clear()
                 session["username"] = username
                 session.permanent = True
+                session["csrf_token"] = secrets.token_hex(32)
                 reset_login_rate_limit()
                 user_info = get_safe_user_info(username)
                 return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="")
@@ -199,6 +214,8 @@ def login():
 @app.route("/logout")
 def logout():
     session.clear()
+    # 生成新 CSRF Token 防止会话重用
+    session["csrf_token"] = secrets.token_hex(32)
     return redirect("/")
 
 
@@ -218,6 +235,25 @@ def inject_csrf_token():
     return dict(csrf_token=get_csrf_token())
 
 
+# ── 安全响应头 ──
+@app.after_request
+def add_security_headers(response):
+    """添加安全响应头"""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "form-action 'self'"
+    )
+    response.headers["Content-Security-Policy"] = csp
+    return response
+
+
 # ── 注册 ──
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -230,10 +266,15 @@ def register():
             error = "表单验证失败，请重试"
             return render_template("register.html", error=error)
 
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        email = request.form.get("email", "").strip()
-        phone = request.form.get("phone", "").strip()
+        # 检查注册频率限制
+        if not check_register_rate_limit():
+            error = "注册尝试过于频繁，请稍后再试"
+            return render_template("register.html", error=error)
+
+        username = request.form.get("username", "").strip()[:32]
+        password = request.form.get("password", "")[:128]
+        email = request.form.get("email", "").strip()[:254]
+        phone = request.form.get("phone", "").strip()[:20]
 
         # 输入验证
         if not validate_username(username):
@@ -260,7 +301,7 @@ def register():
                 session["csrf_token"] = secrets.token_hex(32)
                 return redirect("/login?msg=注册成功，请登录")
             except sqlite3.IntegrityError:
-                error = "用户名已存在，请选择其他用户名"
+                error = "注册失败，用户名可能已存在，请尝试其他用户名"
             except Exception as e:
                 app.logger.error(f"注册失败: {e}")
                 error = "注册失败，请稍后重试"
@@ -299,6 +340,18 @@ def search():
 # ── 上传头像（需要登录）──
 UPLOAD_FOLDER = os.path.join("static", "uploads")
 
+
+def safe_filename(filename):
+    """移除路径遍历字符，保留原始文件名"""
+    # 只保留文件名部分，去除目录路径
+    filename = os.path.basename(filename)
+    # 移除空字符和路径分隔符
+    filename = filename.replace("\x00", "").replace("\x00", "")
+    if not filename:
+        filename = "unnamed"
+    return filename
+
+
 @app.route("/upload", methods=["GET", "POST"])
 @login_required
 def upload():
@@ -321,14 +374,17 @@ def upload():
             if file.filename == "":
                 error = "没有选择文件"
             else:
-                # 保存上传目录
-                os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-                # 使用用户提供的原始文件名保存，不做安全处理
-                save_path = os.path.join(UPLOAD_FOLDER, file.filename)
+                # 使用用户子目录隔离不同用户的上传文件
+                username = session.get("username", "anonymous")
+                user_upload_dir = os.path.join(UPLOAD_FOLDER, username)
+                os.makedirs(user_upload_dir, exist_ok=True)
+                # 移除路径遍历字符，保留原始文件名
+                original_name = safe_filename(file.filename)
+                save_path = os.path.join(user_upload_dir, original_name)
                 file.save(save_path)
-                file_url = url_for("static", filename=f"uploads/{file.filename}")
-                filename = file.filename
-                success = f"文件上传成功！"
+                file_url = url_for("static", filename=f"uploads/{username}/{original_name}")
+                filename = original_name
+                success = "文件上传成功！"
 
     return render_template("upload.html", error=error, success=success, file_url=file_url, filename=filename)
 
