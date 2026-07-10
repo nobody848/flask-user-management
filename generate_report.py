@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成文件上传漏洞专项分析报告 Word 文档"""
+"""生成业务逻辑及越权漏洞分析报告"""
 
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
@@ -11,7 +11,6 @@ import os
 
 
 def add_code(doc, code_text):
-    """添加代码块"""
     p = doc.add_paragraph()
     p.paragraph_format.left_indent = Cm(0.5)
     p.paragraph_format.space_before = Pt(4)
@@ -22,11 +21,9 @@ def add_code(doc, code_text):
     run.font.color.rgb = RGBColor(0x2D, 0x2D, 0x2D)
     shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="0xF5F5F5"/>')
     p._p.get_or_add_pPr().append(shading)
-    return p
 
 
 def add_table(doc, headers, rows, col_widths=None):
-    """添加表格"""
     table = doc.add_table(rows=1 + len(rows), cols=len(headers), style='Light Grid Accent 1')
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     for i, h in enumerate(headers):
@@ -49,7 +46,6 @@ def add_table(doc, headers, rows, col_widths=None):
 def create_report():
     doc = Document()
 
-    # 全局样式
     style = doc.styles['Normal']
     style.font.name = '微软雅黑'
     style.font.size = Pt(11)
@@ -65,24 +61,19 @@ def create_report():
     section.left_margin = Cm(2.5)
     section.right_margin = Cm(2.5)
 
-    # ══════════════════════════════════════
-    # 封面
-    # ══════════════════════════════════════
+    # ═══════ 封面 ═══════
     for _ in range(6):
         doc.add_paragraph()
-
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title.add_run('Flask 用户管理系统')
-    run.bold = True
-    run.font.size = Pt(28)
+    run.bold = True; run.font.size = Pt(28)
     run.font.color.rgb = RGBColor(0x1a, 0x1a, 0x2e)
 
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run('文件上传漏洞专项分析报告')
-    run.bold = True
-    run.font.size = Pt(20)
+    run = subtitle.add_run('业务逻辑及越权漏洞分析报告')
+    run.bold = True; run.font.size = Pt(20)
     run.font.color.rgb = RGBColor(0x66, 0x7e, 0xea)
 
     doc.add_paragraph()
@@ -90,432 +81,492 @@ def create_report():
     line.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = line.add_run('━' * 40)
     run.font.color.rgb = RGBColor(0x66, 0x7e, 0xea)
-
     doc.add_paragraph()
+
     info = doc.add_paragraph()
     info.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = info.add_run(
         '项目地址：github.com/nobody848/flask-user-management\n'
         '分析日期：2026-07-09\n'
-        '分析范围：/upload 路由及 static/uploads/ 目录'
+        '分析范围：/profile 路由、/recharge 路由、profile.html 模板'
     )
     run.font.size = Pt(12)
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
-
     doc.add_page_break()
 
-    # ══════════════════════════════════════
-    # 一、功能概述
-    # ══════════════════════════════════════
-    doc.add_heading('一、功能概述', level=1)
-
+    # ═══════ 一、分析范围 ═══════
+    doc.add_heading('一、分析范围', level=1)
     doc.add_paragraph(
-        '用户头像上传功能是项目在已有登录、注册、搜索基础上新增的模块。'
-        '用户登录后可通过导航栏或首页进入上传页面，选择本地文件上传至服务器，'
-        '上传成功后页面显示图片预览和访问链接。'
+        '本次分析聚焦于今日新增的两个业务功能：个人中心（/profile）和充值（/recharge）。'
+        '分析维度包括业务逻辑缺陷和越权漏洞，不涉及其他已有功能模块。'
     )
 
     add_table(doc,
-        ['项目', '说明'],
+        ['功能', '路由', '方法', '描述'],
         [
-            ['路由', '/upload (GET + POST)'],
-            ['登录保护', '@login_required 装饰器'],
-            ['上传限制', 'MAX_CONTENT_LENGTH = 16MB'],
-            ['存储路径', 'static/uploads/{username}/{原始文件名}'],
-            ['安全校验', 'CSRF Token 验证'],
-            ['文件名处理', '保留原始文件名，仅移除路径遍历字符'],
+            ['个人中心', '/profile', 'GET', '根据 URL 参数 user_id 展示用户资料'],
+            ['充值', '/recharge', 'POST', '根据表单 user_id 和 amount 修改用户余额'],
         ],
-        col_widths=[3.5, 12.5]
+        col_widths=[3, 3, 2, 8]
     )
 
     doc.add_paragraph()
-    doc.add_paragraph('涉及的核心代码文件：', style='List Bullet')
-    doc.add_paragraph('app.py — upload 路由（第 340-389 行）', style='List Bullet')
-    doc.add_paragraph('templates/upload.html — 上传页面模板', style='List Bullet')
-    doc.add_paragraph('static/uploads/ — 文件存储目录', style='List Bullet')
+    doc.add_heading('1.1 核心代码定位', level=2)
+    doc.add_paragraph('个人中心路由（app.py 第 415-425 行）：')
+    add_code(doc, '''@app.route("/profile")
+@login_required
+def profile():
+    user_id = request.args.get("user_id", "")
+    user_info = get_user_by_id(user_id)
+    if user_info is None:
+        return render_template("profile.html", user=None, error="未找到该用户")
+    return render_template("profile.html", user=user_info, error=None)''')
+
+    doc.add_paragraph('充值路由（app.py 第 428-447 行）：')
+    add_code(doc, '''@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    user_id = request.form.get("user_id", "")
+    amount = request.form.get("amount", "0")
+    try:
+        amount = float(amount)
+        user_id_int = int(user_id)
+    except (ValueError, TypeError):
+        return redirect(f"/profile?user_id={user_id}")
+    conn = sqlite3.connect("data/users.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
+    conn.commit()
+    conn.close()
+    return redirect(f"/profile?user_id={user_id}")''')
+
+    doc.add_paragraph('充值表单（profile.html 第 22-29 行）：')
+    add_code(doc, '''<form action="/recharge" method="POST" class="recharge-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="user_id" value="{{ user.id }}">
+    <div class="form-group">
+        <label for="amount">充值金额</label>
+        <input type="number" id="amount" name="amount" step="0.01"
+               placeholder="请输入充值金额" class="recharge-input">
+    </div>
+    <button type="submit" class="btn btn-primary">确认充值</button>
+</form>''')
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════
-    # 二、漏洞发现过程
-    # ══════════════════════════════════════
+    # ═══════ 二、漏洞发现过程 ═══════
     doc.add_heading('二、漏洞发现过程', level=1)
+    doc.add_paragraph('以下按严重程度从高到低逐一描述每个漏洞的发现过程、攻击路径和修复方案。')
 
-    # ── UF-01 ──
-    doc.add_heading('UF-01：文件上传路径遍历（高危）', level=2)
+    # ── BL-01 ──
+    doc.add_heading('BL-01：水平越权 — 任意用户资料可被越权查看（高危）', level=2)
 
     doc.add_heading('1. 漏洞发现', level=3)
     doc.add_paragraph(
-        '审查 upload 函数的 POST 处理逻辑时，发现 file.filename 直接被拼接到文件保存路径中。'
-        'Python 的 os.path.join 在遇到绝对路径参数时会丢弃之前的路径部分，且 "../" 序列'
-        '可以穿越目录。这意味着攻击者可以构造特殊文件名将文件写入项目目录之外的任意位置。'
+        '审查 /profile 路由时发现，user_id 参数完全来自 URL 查询字符串（request.args.get），'
+        '后端没有将当前登录用户与请求查询的 user_id 做任何比对。'
+        '这意味着用户 alice 登录后，只需将 URL 中的 user_id=2 改为 user_id=1，'
+        '即可查看管理员 admin 的完整资料，包括邮箱、手机号和余额。'
     )
 
     doc.add_heading('2. 漏洞代码定位', level=3)
-    doc.add_paragraph('文件：app.py，upload 函数（修复前第 326-328 行）')
+    add_code(doc, '''# ❌ 问题代码：user_id 来源与当前用户无关
+user_id = request.args.get("user_id", "")     # 从 URL 获取，与 session 无关
+user_info = get_user_by_id(user_id)           # 直接查询，无视所有权
 
-    add_code(doc, '''@app.route("/upload", methods=["GET", "POST"])
-@login_required
-def upload():
-    ...
-    # ❌ 漏洞代码：直接拼接用户提供的文件名
-    save_path = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(save_path)''')
+# 缺少的关键校验：
+# if str(user_id) != str(session.get("user_id")):
+#     return abort(403)''')
 
     doc.add_heading('3. 攻击路径推演', level=3)
-
     add_table(doc,
         ['步骤', '操作', '说明'],
         [
-            ['1', '攻击者登录系统', '任何注册用户均可执行'],
-            ['2', '构造恶意文件名', '例如 "../../evil.py"'],
-            ['3', '上传文件', 'POST /upload，multipart/form-data'],
-            ['4', '实际保存位置', 'os.path.join 解析：\nstatic/uploads/../../evil.py\n→ 项目根目录/evil.py'],
-            ['5', '进阶攻击', '进一步构造 "../../../etc/cron.d/malicious"\n→ 覆盖系统定时任务'],
+            ['1', 'alice 登录系统', '以普通用户 alice 身份登录'],
+            ['2', '访问个人中心', '正常 URL：/profile?user_id=2（alice 自己的资料）'],
+            ['3', '修改 URL 参数', '将 URL 改为 /profile?user_id=1'],
+            ['4', '越权查看', 'admin 的邮箱、手机、余额全部展示在页面上'],
+            ['5', '遍历全部用户', '继续修改 user_id=3,4,5... 可枚举所有注册用户信息'],
         ],
         col_widths=[1, 3.5, 10]
     )
 
-    doc.add_paragraph()
-    doc.add_heading('4. 危害等级评定', level=3)
+    doc.add_heading('4. 危害评级', level=3)
     add_table(doc,
         ['维度', '评级', '说明'],
         [
-            ['攻击复杂度', '低', '仅需登录和普通 HTTP 请求'],
-            ['利用难度', '低', '无需特殊工具，curl 即可完成'],
-            ['影响范围', '高', '可写入任意目录，可能导致 RCE'],
-            ['综合评级', '🔴 高危', 'CVSS 3.x 评分：8.1'],
+            ['攻击复杂度', '极低', '仅需修改浏览器 URL 参数'],
+            ['利用难度', '极低', '无需任何工具，在地址栏操作即可'],
+            ['影响范围', '高', '所有注册用户的个人隐私数据均可被窃取'],
+            ['综合评级', '🔴 高危', 'CVSS 3.x 评分：7.5'],
         ],
-        col_widths=[3.5, 3, 9]
+        col_widths=[3.5, 2, 10]
     )
 
-    doc.add_paragraph()
     doc.add_heading('5. 修复方案', level=3)
-    doc.add_paragraph('新增 safe_filename 函数，使用 os.path.basename() 提取纯文件名部分：')
-    add_code(doc, '''def safe_filename(filename):
-    """移除路径遍历字符，保留原始文件名"""
-    # 只保留文件名部分，去除所有目录路径
-    filename = os.path.basename(filename)
-    # 移除空字符
-    filename = filename.replace("\\x00", "")
-    if not filename:
-        filename = "unnamed"
-    return filename
+    doc.add_paragraph('在 /profile 路由中增加身份校验，确保只能查看当前登录用户本人的资料：')
+    add_code(doc, '''@app.route("/profile")
+@login_required
+def profile():
+    user_id = request.args.get("user_id", "")
+    # 获取当前登录用户 ID
+    current_username = session.get("username")
+    current_user = get_user_from_db(current_username)
+    current_user_id = get_user_id_by_username(current_username)  # 需新增此函数
 
-# 修复后在 upload 函数中使用
-original_name = safe_filename(file.filename)
-save_path = os.path.join(user_upload_dir, original_name)
-file.save(save_path)''')
+    # 权限校验：只能查看自己的资料
+    if str(user_id) != str(current_user_id):
+        return abort(403)
+
+    user_info = get_user_by_id(user_id)
+    ...''')
 
     doc.add_paragraph()
-    doc.add_heading('6. 修复验证', level=3)
-    doc.add_paragraph('测试各种恶意文件名：')
-    add_code(doc, '''# 测试用例 1：路径遍历
-输入： "../../etc/passwd"
-basename 提取后： "passwd"
-保存路径：      static/uploads/admin/passwd ✅ 安全
 
-# 测试用例 2：绝对路径
-输入： "/etc/cron.d/evil"
-basename 提取后： "evil"
-保存路径：      static/uploads/admin/evil ✅ 安全
-
-# 测试用例 3：空字符绕过
-输入： "malware.exe\\x00.jpg"
-replace 清除后： "malware.exe.jpg"
-保存路径：      static/uploads/admin/malware.exe.jpg ✅ 安全
-
-# 测试用例 4：正常文件名
-输入： "avatar.png"
-basename 提取后： "avatar.png"
-保存路径：      static/uploads/admin/avatar.png ✅ 正常''')
-
-    doc.add_page_break()
-
-    # ── UF-02 ──
-    doc.add_heading('UF-02：用户间文件覆盖（低危）', level=2)
+    # ── BL-02 ──
+    doc.add_heading('BL-02：水平越权 — 任意用户余额可被他人篡改（高危）', level=2)
 
     doc.add_heading('1. 漏洞发现', level=3)
     doc.add_paragraph(
-        '审查存储路径时，发现所有用户的上传文件都存放在 static/uploads/ 的同一层级下，'
-        '没有按用户隔离。假设用户 A 上传了 photo.png，用户 B 再上传同名的 photo.png 时，'
-        '会静默覆盖用户 A 的文件。这不仅导致数据丢失，还可能被恶意用户利用来替换他人的头像文件。'
+        '审查 /recharge 路由时发现，user_id 参数来自表单 POST 数据（request.form.get），'
+        '且充值表单中的 user_id 是一个隐藏的 input 字段。后端既没有验证当前登录用户 '
+        '与充值目标的 user_id 是否匹配，也没有在服务端重新确认 user_id 的真实性。'
+        '攻击者只需修改 HTML 中的隐藏字段值，或直接用 curl 构造 POST 请求，'
+        '即可为任意用户充值或扣减余额。'
     )
 
     doc.add_heading('2. 漏洞代码定位', level=3)
-    doc.add_paragraph('文件：app.py，upload 函数（修复前）')
-    add_code(doc, '''# ❌ 修复前：所有用户共用同一目录
-save_path = os.path.join(UPLOAD_FOLDER, file.filename)
-file.save(save_path)
-file_url = url_for("static", filename=f"uploads/{file.filename}")
+    add_code(doc, '''# ❌ 问题代码：user_id 来自前端隐藏字段，完全不可信
+user_id = request.form.get("user_id", "")   # 隐藏字段容易被篡改
+amount = request.form.get("amount", "0")
+...
+cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
 
-# 用户 A 上传 photo.png → static/uploads/photo.png
-# 用户 B 上传 photo.png → static/uploads/photo.png (覆盖 A 的文件)''')
+# 缺少的关键校验：
+# 1. 未校验当前用户 == 充值目标用户
+# 2. 未在服务端重新获取 user_id（不应信赖前端传入）''')
 
     doc.add_heading('3. 攻击路径推演', level=3)
     add_table(doc,
         ['步骤', '操作', '说明'],
         [
-            ['1', '用户 A 上传头像', '上传 photo.png → 正常使用'],
-            ['2', '用户 B 上传同名文件', '也命名为 photo.png'],
-            ['3', '文件被覆盖', 'static/uploads/photo.png 变为 B 的文件'],
-            ['4', '用户 A 的头像被替换', 'A 的页面显示 B 上传的图片'],
+            ['1', 'alice 登录系统', '以普通用户 alice 身份登录'],
+            ['2', '打开个人中心', '正常页面，充值表单的隐藏 user_id=2'],
+            ['3', '修改隐藏字段', '浏览器 DevTools 将 user_id 改为 1（admin 的 ID）'],
+            ['4', '输入金额提交', '充值 -99999 → admin 余额从 99999 变为 0'],
+            ['5', '直接构造请求', 'curl -X POST /recharge -d "user_id=1&amount=-99999"'],
         ],
         col_widths=[1, 4, 10]
     )
 
+    doc.add_heading('4. 危害评级', level=3)
+    add_table(doc,
+        ['维度', '评级', '说明'],
+        [
+            ['攻击复杂度', '极低', '浏览器 DevTools 或 curl 即可完成'],
+            ['利用难度', '极低', '无需任何特殊权限'],
+            ['影响范围', '高', '任意用户的余额可被任意增减，直接造成经济损失'],
+            ['综合评级', '🔴 高危', 'CVSS 3.x 评分：8.1'],
+        ],
+        col_widths=[3.5, 2, 10]
+    )
+
+    doc.add_heading('5. 修复方案', level=3)
+    doc.add_paragraph('充值时应从 session 获取当前用户，并强制只能操作自己的账户：')
+    add_code(doc, '''@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    amount = request.form.get("amount", "0")
+    # 从 session 获取当前登录用户身份（不信任前端传入的 user_id）
+    current_username = session.get("username")
+    current_user = get_user_from_db(current_username)
+    current_user_id = get_user_id_by_username(current_username)
+
+    try:
+        amount = float(amount)
+    except (ValueError, TypeError):
+        return redirect(f"/profile?user_id={current_user_id}")
+
+    # 只能给自己充值
+    conn = sqlite3.connect("data/users.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?",
+                   (amount, current_user_id))
+    conn.commit()
+    conn.close()
+
+    return redirect(f"/profile?user_id={current_user_id}")''')
+
     doc.add_paragraph()
+
+    # ── BL-03 ──
+    doc.add_heading('BL-03：业务逻辑缺陷 — 充值金额可正可负（中危）', level=2)
+
+    doc.add_heading('1. 漏洞发现', level=3)
+    doc.add_paragraph(
+        '审查 /recharge 路由时发现，amount 参数直接从表单获取后转为 float，'
+        '直接执行 SQL 的 balance = balance + amount。代码没有对 amount 做任何正负校验，'
+        '这意味着用户可以提交负数金额来实现"反向充值"——实际是从账户中扣减余额。'
+        '更严重的是，由于 BL-02 的越权漏洞，攻击者可以用负数给任意用户扣款。'
+    )
+
+    doc.add_heading('2. 漏洞代码定位', level=3)
+    add_code(doc, '''# ❌ 问题代码：amount 未做范围校验
+amount = float(amount)    # 用户可传入 -9999999.99
+...
+cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
+# balance = balance + (-9999999.99) → 余额瞬间变负数''')
+
+    doc.add_heading('3. 攻击路径推演', level=3)
+    add_table(doc,
+        ['步骤', '操作', '效果'],
+        [
+            ['1', '登录任意账户', '获取合法 session'],
+            ['2', '提交 amount=-99999', '余额被扣减 99999'],
+            ['3', '反复提交', '余额可被扣到负数甚至 -∞'],
+            ['4', '越权组合利用', '将他人余额扣为负数，实现"抢劫"'],
+        ],
+        col_widths=[1, 4.5, 8.5]
+    )
+
     doc.add_heading('4. 修复方案', level=3)
-    doc.add_paragraph('按用户名创建子目录，实现用户间文件隔离：')
-    add_code(doc, '''# ✅ 修复后：按用户隔离
-username = session.get("username", "anonymous")
-user_upload_dir = os.path.join(UPLOAD_FOLDER, username)
-os.makedirs(user_upload_dir, exist_ok=True)
-original_name = safe_filename(file.filename)
-save_path = os.path.join(user_upload_dir, original_name)
-file.save(save_path)
-file_url = url_for("static", filename=f"uploads/{username}/{original_name}")
+    add_code(doc, '''# ✅ 修复：增加金额正负校验
+try:
+    amount = float(amount)
+    if amount <= 0:
+        return redirect(f"/profile?user_id={user_id}?error=充值金额必须为正数")
+except (ValueError, TypeError):
+    return redirect(f"/profile?user_id={user_id}")''')
 
-# 用户 A 上传 photo.png → static/uploads/admin/photo.png
-# 用户 B 上传 photo.png → static/uploads/alice/photo.png ✅ 隔离''')
+    doc.add_paragraph()
 
-    doc.add_page_break()
-
-    # ── UF-03 ──
-    doc.add_heading('UF-03：同用户同名文件覆盖（低危）', level=2)
+    # ── BL-04 ──
+    doc.add_heading('BL-04：信息泄露 — 用户 ID 可被枚举遍历（中危）', level=2)
 
     doc.add_heading('1. 漏洞发现', level=3)
     doc.add_paragraph(
-        '在上述用户隔离修复的基础上进一步审查，发现即使在同一用户目录下，'
-        '上传同名文件仍然会静默覆盖旧文件。虽然按设计需求使用了原始文件名，'
-        '但没有提示用户文件已存在或自动添加后缀。'
+        '审查 /profile 路由的查询逻辑时发现，user_id 参数使用连续的整数自增 ID，'
+        '且未登录用户无法访问（有 @login_required 保护），但任何已登录用户'
+        '可以通过遍历 user_id 参数来发现系统中有多少注册用户以及他们的详细信息。'
+        '这构成了用户枚举攻击（User Enumeration）。'
     )
 
     doc.add_heading('2. 攻击路径推演', level=3)
-    add_code(doc, '''Step 1: 用户上传重要头像文件 "myavatar.png"
-Step 2: 之后再次上传一个新的同名文件 "myavatar.png"
-Step 3: 旧文件被静默覆盖，无法恢复
-Step 4: 如果用户希望保留旧版本，只能手动备份''')
+    add_code(doc, '''# 使用 curl 脚本遍历所有用户
+for i in $(seq 1 100); do
+  curl -b "session=..." "http://localhost:5000/profile?user_id=$i"
+  # 根据返回内容判断用户是否存在
+done
+# 结果：系统中有哪些用户、各用户的邮箱、手机、余额全部暴露''')
 
-    doc.add_paragraph()
     doc.add_heading('3. 修复方案', level=3)
-    doc.add_paragraph('检测文件是否已存在，若存在则自动添加数字后缀：')
-    add_code(doc, '''import os.path
+    doc.add_paragraph('将连续的整数 ID 替换为 UUID 或随机的用户标识符，或在已修复 BL-01 的基础上，'
+                       '用户只能看到自己的资料，枚举将无法获取他人信息。')
 
-def get_unique_filename(directory, filename):
-    """如果文件已存在，自动添加数字后缀避免覆盖"""
-    name, ext = os.path.splitext(filename)
-    counter = 1
-    new_filename = filename
-    while os.path.exists(os.path.join(directory, new_filename)):
-        new_filename = f"{name}_{counter}{ext}"
-        counter += 1
-    return new_filename
+    doc.add_paragraph()
 
-# upload 函数中使用
-original_name = safe_filename(file.filename)
-unique_name = get_unique_filename(user_upload_dir, original_name)
-save_path = os.path.join(user_upload_dir, unique_name)
-file.save(save_path)''')
-
-    doc.add_page_break()
-
-    # ── UF-04 ──
-    doc.add_heading('UF-04：无上传频率限制（中危）', level=2)
+    # ── BL-05 ──
+    doc.add_heading('BL-05：业务逻辑缺陷 — 充值操作无频率限制（低危）', level=2)
 
     doc.add_heading('1. 漏洞发现', level=3)
     doc.add_paragraph(
-        '审查 upload 路由时，发现上传接口没有频率限制。攻击者可以高频上传大量文件，'
-        '导致服务器磁盘空间耗尽（Disk Exhaustion），构成拒绝服务攻击（DoS）。'
-        '虽然 MAX_CONTENT_LENGTH 限制了单文件大小（16MB），但未限制上传次数。'
+        '审查 /recharge 路由时发现，该接口没有任何频率限制。'
+        '虽然登录接口有 check_login_rate_limit()、注册接口有 check_register_rate_limit()，'
+        '但充值接口完全没有任何速率控制。攻击者可以在短时间内发送大量充值请求，'
+        '如果结合 BL-03（负数金额），可以极快地破坏账户余额数据。'
     )
 
-    doc.add_heading('2. 攻击路径推演', level=3)
-    add_code(doc, '''Step 1: 攻击者编写脚本循环 POST /upload（每次上传 16MB 文件）
-Step 2: 每秒上传 1 次，持续 10 分钟 → 约 9.6GB 磁盘占用
-Step 3: 服务器磁盘空间耗尽 → 数据库无法写入 → 服务完全不可用
-Step 4: 即使重启服务，上传的文件仍然占用磁盘''')
+    doc.add_heading('2. 漏洞代码定位', level=3)
+    add_code(doc, '''# ❌ 问题代码：充值接口完全无频率限制
+@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    user_id = request.form.get("user_id", "")
+    amount = request.form.get("amount", "0")
+    # ... 缺少频率校验
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", ...)''')
+
+    doc.add_heading('3. 攻击路径推演', level=3)
+    add_code(doc, '''# 每秒发送 100 次扣款请求，5 秒内将余额扣到负数
+for i in $(seq 1 500); do
+  curl -X POST -b "session=..." \\
+    -d "user_id=2&amount=-99999" \\
+    "http://localhost:5000/recharge" &
+done
+wait''')
+
+    doc.add_heading('4. 修复方案', level=3)
+    add_code(doc, '''# ✅ 复用项目已有的频率限制框架
+RECHARGE_ATTEMPTS = {}
+MAX_RECHARGE_ATTEMPTS = 5
+RECHARGE_LOCKOUT_TIME = 60  # 1 分钟
+
+def check_recharge_rate_limit():
+    return _check_rate_limit(RECHARGE_ATTEMPTS, MAX_RECHARGE_ATTEMPTS,
+                             RECHARGE_LOCKOUT_TIME, "recharge")
+
+@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    if not check_recharge_rate_limit():
+        return redirect("/profile?user_id=当前用户ID&error=操作过于频繁")
+    ...''')
 
     doc.add_paragraph()
+
+    # ── BL-06 ──
+    doc.add_heading('BL-06：业务逻辑缺陷 — CSRF 防护依赖于前端隐藏字段（低危）', level=2)
+
+    doc.add_heading('1. 漏洞发现', level=3)
+    doc.add_paragraph(
+        '审查 profile.html 中的充值表单发现，user_id 通过隐藏的 input 字段传递。'
+        '虽然项目已经实现了 CSRF Token 防护，但 user_id 放在隐藏字段中意味着：'
+        '攻击者可以通过浏览器的"查看页面源代码"或 DevTools 轻易获取当前页面的 user_id。'
+        '结合 BL-02 和 BL-03，如果攻击者能诱使用户点击一个构造好的表单，'
+        '就可以利用 CSRF + 越权 + 负金额的组合实现跨站扣款攻击。'
+    )
+
+    doc.add_heading('2. 漏洞代码定位', level=3)
+    add_code(doc, '''<!-- ❌ 问题：user_id 暴露在前端，且未经服务端二次确认 -->
+<input type="hidden" name="user_id" value="{{ user.id }}">
+<!-- 攻击者只需查看页面源代码即可获得此值 -->''')
+
     doc.add_heading('3. 修复方案', level=3)
-    doc.add_paragraph('复用项目已有的频率限制框架，添加上传频率限制：')
-    add_code(doc, '''# app.py 配置部分新增
-UPLOAD_ATTEMPTS = {}
-MAX_UPLOAD_ATTEMPTS = 10
-UPLOAD_LOCKOUT_TIME = 300  # 5 分钟
+    doc.add_paragraph('user_id 不应依赖前端传入，而应从服务端 session 中获取：')
+    add_code(doc, '''# ✅ 修复：充值表单移除 user_id 隐藏字段
+<form action="/recharge" method="POST" class="recharge-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-group">
+        <label for="amount">充值金额</label>
+        <input type="number" id="amount" name="amount" step="0.01"
+               placeholder="请输入充值金额" class="recharge-input">
+    </div>
+    <button type="submit" class="btn btn-primary">确认充值</button>
+</form>
 
-def check_upload_rate_limit():
-    return _check_rate_limit(UPLOAD_ATTEMPTS, MAX_UPLOAD_ATTEMPTS, UPLOAD_LOCKOUT_TIME, "upload")
-
-# upload 函数开头增加
-if not check_upload_rate_limit():
-    error = "上传过于频繁，请稍后再试"
-    return render_template("upload.html", error=error)''')
+# 服务端直接从 session 获取充值目标
+current_user_id = session.get("user_id")   # 服务端可靠来源
+cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?",
+               (amount, current_user_id))''')
 
     doc.add_page_break()
 
-    # ── UF-05 ──
-    doc.add_heading('UF-05：文件元数据注入（信息泄露）', level=2)
+    # ═══════ 三、漏洞汇总 ═══════
+    doc.add_heading('三、漏洞汇总', level=1)
 
-    doc.add_heading('1. 漏洞发现', level=3)
+    add_table(doc,
+        ['编号', '漏洞名称', '类型', '严重', '涉及功能'],
+        [
+            ['BL-01', '水平越权 — 任意用户资料可被查看', '越权漏洞', '🔴 高危', '/profile'],
+            ['BL-02', '水平越权 — 任意用户余额可被篡改', '越权漏洞', '🔴 高危', '/recharge'],
+            ['BL-03', '充值金额可正可负（反向扣款）', '业务逻辑', '🟠 中危', '/recharge'],
+            ['BL-04', '用户 ID 可被枚举遍历', '信息泄露', '🟠 中危', '/profile'],
+            ['BL-05', '充值操作无频率限制', '业务逻辑', '🟡 低危', '/recharge'],
+            ['BL-06', 'user_id 暴露在前端隐藏字段', '业务逻辑', '🟡 低危', 'profile.html'],
+        ],
+        col_widths=[1.5, 6, 2.5, 2, 2.5]
+    )
+
+    doc.add_page_break()
+
+    # ═══════ 四、越权攻击路径全景 ═══════
+    doc.add_heading('四、越权攻击路径全景', level=1)
+
+    doc.add_paragraph('以下展示从攻击者视角出发，各漏洞之间如何串联形成完整的攻击链：')
+
+    doc.add_heading('攻击链 1：越权窃取信息', level=2)
+    add_table(doc,
+        ['步骤', '操作', '利用漏洞'],
+        [
+            ['1', '登录系统获取合法 session', '正常登录功能'],
+            ['2', '遍历 /profile?user_id=1,2,3...', 'BL-01 水平越权 + BL-04 ID枚举'],
+            ['3', '获取所有用户资料', '邮箱、手机号可用于钓鱼或撞库'],
+        ],
+        col_widths=[1, 8, 6]
+    )
+
+    doc.add_heading('攻击链 2：越权篡改余额', level=2)
+    add_table(doc,
+        ['步骤', '操作', '利用漏洞'],
+        [
+            ['1', '登录系统获取合法 session', '正常登录功能'],
+            ['2', '提交 POST /recharge', '无频率限制 BL-05'],
+            ['3', '修改隐藏字段 user_id=目标用户ID', 'BL-02 越权充值'],
+            ['4', '填入负数 amount=-99999', 'BL-03 负金额扣款'],
+            ['5', '目标用户余额被清空或变为负数', '直接经济损失'],
+        ],
+        col_widths=[1, 8, 6]
+    )
+
+    doc.add_heading('攻击链 3：组合攻击 — 全面破坏', level=2)
+    add_table(doc,
+        ['步骤', '操作', '利用漏洞'],
+        [
+            ['1', '编写自动化脚本', 'BL-04 枚举获得全部 user_id'],
+            ['2', '遍历所有用户扣款', 'BL-02 + BL-03 + BL-05 叠加利用'],
+            ['3', '系统所有用户余额归零', '业务完全瘫痪'],
+            ['4', '数据库余额出现负数', '后续业务逻辑混乱'],
+        ],
+        col_widths=[1, 8, 6]
+    )
+
+    doc.add_page_break()
+
+    # ═══════ 五、漏洞成因分析 ═══════
+    doc.add_heading('五、漏洞成因分析', level=1)
+
+    doc.add_heading('5.1 根因：信赖客户端传入的用户标识', level=2)
     doc.add_paragraph(
-        '审查上传功能的整体流程时，发现上传的文件原样保存到服务器，'
-        '没有清除文件中的元数据（EXIF 等）。照片文件通常包含 GPS 定位、'
-        '相机型号、拍摄时间等敏感信息。用户上传头像时可能无意中泄露这些信息。'
+        '所有越权漏洞的根源在于：系统使用客户端传入的 user_id 作为用户身份标识，'
+        '而没有与服务端 session 中保存的用户身份进行比对。'
+        '在 Web 安全中，任何来自客户端的数据（URL 参数、表单字段、Cookie、HTTP 头）'
+        '都是不可信的，必须经过服务端验证后方可使用。'
     )
 
-    doc.add_paragraph()
-    doc.add_heading('2. 攻击路径推演', level=3)
-    add_code(doc, '''Step 1: 用户用手机拍摄照片后直接上传作为头像
-Step 2: 照片 EXIF 中包含 GPS 坐标、拍摄时间、设备信息
-Step 3: 其他用户下载头像图片 → 读取 EXIF → 获取上传者的位置信息
-Step 4: 结合社交媒体信息，可能定位到具体住址''')
+    doc.add_heading('5.2 数据流对比', level=2)
+    doc.add_paragraph('信任链分析（修复前 vs 修复后）：')
+    add_table(doc,
+        ['环节', '修复前（不安全）', '修复后（安全）'],
+        [
+            ['user_id 来源', 'URL 参数 / 表单隐藏字段（客户端可控）', 'Session（服务端存储，客户端不可篡改）'],
+            ['身份校验', '无', '比对 session 中的用户身份与操作目标'],
+            ['amount 校验', '无（正负均可）', '校验 amount > 0'],
+            ['频率限制', '无', '复用 _check_rate_limit 框架'],
+        ],
+        col_widths=[3, 6, 6]
+    )
 
-    doc.add_paragraph()
-    doc.add_heading('3. 修复建议', level=3)
-    doc.add_paragraph('虽然本项目未实现此修复（按需求不做文件内容处理），但作为安全建议记录：')
-    add_code(doc, '''# 推荐方案：上传后清除 EXIF（使用 Pillow 库）
-from PIL import Image
-
-def strip_exif(image_path):
-    """清除图片中的 EXIF 元数据"""
-    img = Image.open(image_path)
-    # 读取图片数据
-    data = list(img.getdata())
-    # 不带 EXIF 重新保存
-    img_without_exif = Image.new(img.mode, img.size)
-    img_without_exif.putdata(data)
-    img_without_exif.save(image_path)
-    print(f"[安全] 已清除 EXIF 元数据: {image_path}")''')
+    doc.add_heading('5.3 OWASP 分类映射', level=2)
+    add_table(doc,
+        ['OWASP 类别', '对应漏洞', '说明'],
+        [
+            ['A01:2024-Broken Access Control', 'BL-01, BL-02', '未对用户操作进行权限校验'],
+            ['A04:2024-Insecure Design', 'BL-03, BL-05, BL-06', '业务逻辑设计缺陷'],
+            ['A05:2024-Security Misconfiguration', 'BL-04', '使用可枚举的连续整数 ID'],
+        ],
+        col_widths=[6, 3.5, 5.5]
+    )
 
     doc.add_page_break()
 
-    # ── UF-06 ──
-    doc.add_heading('UF-06：CSRF 未覆盖上传接口（修复前高危）', level=2)
-
-    doc.add_heading('1. 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 upload 函数时，确认其已包含 CSRF Token 校验，但需要检查这个保护是否'
-        '真正生效。CSRF 攻击的核心是攻击者伪造请求以受害者身份执行操作。'
-        '对于上传功能，如果没有 CSRF 保护，攻击者可以构造一个自动提交表单的页面，'
-        '诱使受害者访问后自动上传恶意文件。'
-    )
-
-    doc.add_paragraph()
-    doc.add_heading('2. 攻击路径推演', level=3)
-    add_code(doc, '''Step 1: 攻击者构造恶意 HTML 页面
-Step 2: 页面包含隐藏表单，自动 POST 到 /upload
-Step 3: 页面托管在攻击者的网站上
-Step 4: 诱使已登录的受害者访问该页面
-Step 5: 受害者的浏览器自动发送包含其 session cookie 的上传请求
-Step 6: 恶意文件被上传到受害者账号下''')
-
-    doc.add_paragraph()
-    doc.add_heading('3. 确认防护有效', level=3)
-    doc.add_paragraph('审查发现 upload 路由已正确实现 CSRF 防护：')
-    add_code(doc, '''# ✅ CSRF 防护已实现
-# 模板 upload.html 中包含：
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-# app.py upload 函数中进行校验：
-form_token = request.form.get("csrf_token", "")
-if not form_token or form_token != session.get("csrf_token"):
-    error = "表单验证失败，请重试"
-    return render_template("upload.html", error=error)''')
-
-    doc.add_paragraph('结论：CSRF 防护已到位，攻击者无法伪造跨站上传请求。')
-
-    doc.add_page_break()
-
-    # ══════════════════════════════════════
-    # 三、已修复漏洞清单
-    # ══════════════════════════════════════
-    doc.add_heading('三、已修复漏洞清单', level=1)
+    # ═══════ 六、修复建议总结 ═══════
+    doc.add_heading('六、修复建议总结', level=1)
 
     add_table(doc,
-        ['编号', '漏洞名称', '严重程度', '修复状态'],
+        ['#', '修复项', '对应漏洞', '优先级'],
         [
-            ['UF-01', '文件上传路径遍历', '🔴 高危', '✅ 已修复'],
-            ['UF-02', '用户间文件覆盖', '🟡 低危', '✅ 已修复'],
-            ['UF-03', '同用户同名文件覆盖', '🟡 低危', '📋 建议修复（未实施）'],
-            ['UF-04', '无上传频率限制', '🟠 中危', '📋 建议修复（未实施）'],
-            ['UF-05', '文件元数据注入', '🟡 低危', '📋 建议修复（未实施）'],
-            ['UF-06', 'CSRF 未覆盖上传接口', '🔴 高危', '✅ CSRF 防护已到位——无需修复'],
+            ['1', 'profile 路由增加身份校验：只能查看自己的资料', 'BL-01', '🔴 立即'],
+            ['2', 'recharge 路由从 session 获取用户身份，不信任前端 user_id', 'BL-02', '🔴 立即'],
+            ['3', 'amount 仅接受正数，拒绝 <=0 的充值请求', 'BL-03', '🟠 尽快'],
+            ['4', '使用 UUID 替代自增 ID 或配合身份校验防止枚举', 'BL-04', '🟠 尽快'],
+            ['5', '添加上限频率限制（如 5 次/分钟）', 'BL-05', '🟡 建议'],
+            ['6', '充值表单移除 user_id 隐藏字段', 'BL-06', '🟡 建议'],
         ],
-        col_widths=[1.5, 4.5, 2, 4.5]
+        col_widths=[1, 10, 3, 2]
     )
 
     doc.add_paragraph()
-    doc.add_paragraph('说明：UF-03 ~ UF-05 列为"建议修复"的漏洞，其修复方案已在报告中给出，开发者可根据实际需求选择性实施。UF-06 经确认防护已到位，无需修复。')
 
-    doc.add_page_break()
-
-    # ══════════════════════════════════════
-    # 四、安全防护总览
-    # ══════════════════════════════════════
-    doc.add_heading('四、上传功能安全防护总览', level=1)
-
-    doc.add_paragraph('以下是从攻击者视角到各层防护的完整链路图：')
-
-    add_table(doc,
-        ['攻击类型', '防护层', '防护机制', '状态'],
-        [
-            ['未授权访问', '路由层', '@login_required 装饰器', '✅'],
-            ['CSRF 跨站请求', '校验层', 'CSRF Token 验证', '✅'],
-            ['路径遍历', '文件名层', 'safe_filename() + basename', '✅'],
-            ['文件覆盖（跨用户）', '目录层', '按用户名建子目录', '✅'],
-            ['文件覆盖（同用户）', '文件名层', 'get_unique_filename() 加后缀', '📋'],
-            ['磁盘空间耗尽', '频率层', 'check_upload_rate_limit()', '📋'],
-            ['EXIF 信息泄露', '内容层', 'strip_exif() 清除元数据', '📋'],
-        ],
-        col_widths=[4, 2.5, 5, 1.5]
-    )
-
-    doc.add_page_break()
-
-    # ══════════════════════════════════════
-    # 五、修复验证
-    # ══════════════════════════════════════
-    doc.add_heading('五、修复验证', level=1)
-
-    add_table(doc,
-        ['测试项', '预期结果', '实际结果'],
-        [
-            ['上传普通图片文件', '保存成功，返回 URL', '✅ 通过'],
-            ['上传文件名含 "../"', '路径被剥离，仅存文件名', '✅ 通过'],
-            ['上传文件名含 "/"', '路径被剥离，仅存文件名', '✅ 通过'],
-            ['上传空文件名', '提示"没有选择文件"', '✅ 通过'],
-            ['不选择文件直接提交', '提示"没有选择文件"', '✅ 通过'],
-            ['CSRF Token 错误/缺失', '提示"表单验证失败"', '✅ 通过'],
-            ['用户 A 和 B 传同名文件', '分别保存到各自子目录', '✅ 通过'],
-            ['未登录访问 /upload', '302 跳转到 /login', '✅ 通过'],
-            ['文件超过 16MB', 'Flask 返回 413 错误', '✅ 通过'],
-        ],
-        col_widths=[5.5, 5.5, 2.5]
-    )
-
-    doc.add_paragraph()
-    doc.add_paragraph('所有修复均通过功能验证，原有功能（登录、注册、搜索）未受任何影响。')
-
-    doc.add_page_break()
-
-    # ══════════════════════════════════════
-    # 六、项目地址
-    # ══════════════════════════════════════
-    doc.add_heading('六、项目地址', level=1)
-
-    p = doc.add_paragraph()
-    run = p.add_run('GitHub 仓库：')
-    run.bold = True
-    run = p.add_run('https://github.com/nobody848/flask-user-management')
-    run.font.color.rgb = RGBColor(0x00, 0x66, 0xCC)
-
-    p = doc.add_paragraph()
-    run = p.add_run('本次分析涉及提交：')
-    run.bold = True
-    run = p.add_run('18a36f4（包含上传相关的 UF-01、UF-02 修复）')
-
-    doc.add_paragraph()
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run('━' * 40)
@@ -535,7 +586,7 @@ if not form_token or form_token != session.get("csrf_token"):
 
     # ── 保存 ──
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_path = os.path.join(script_dir, 'static', '文件上传漏洞专项分析报告.docx')
+    output_path = os.path.join(script_dir, 'static', '业务逻辑及越权漏洞分析报告.docx')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     doc.save(output_path)
     print(f'报告已生成：{output_path}')
