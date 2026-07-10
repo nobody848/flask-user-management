@@ -135,6 +135,29 @@ def get_safe_user_info(username):
     return None
 
 
+def get_user_by_id(user_id):
+    """根据 user_id 获取用户信息（不含密码）"""
+    try:
+        user_id = int(user_id)
+    except (ValueError, TypeError):
+        return None
+    conn = sqlite3.connect("data/users.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, email, phone, role, balance FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "id": row[0],
+            "username": row[1],
+            "email": row[2],
+            "phone": row[3],
+            "role": row[4],
+            "balance": row[5],
+        }
+    return None
+
+
 def validate_username(username):
     """用户名验证：只允许字母、数字、下划线，长度 3-32"""
     if not username or len(username) < 3 or len(username) > 32:
@@ -387,6 +410,41 @@ def upload():
                 success = "文件上传成功！"
 
     return render_template("upload.html", error=error, success=success, file_url=file_url, filename=filename)
+
+
+# ── 个人中心（需要登录）──
+@app.route("/profile")
+@login_required
+def profile():
+    user_id = request.args.get("user_id", "")
+    user_info = get_user_by_id(user_id)
+
+    if user_info is None:
+        return render_template("profile.html", user=None, error="未找到该用户")
+
+    return render_template("profile.html", user=user_info, error=None)
+
+
+# ── 充值（需要登录）──
+@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    user_id = request.form.get("user_id", "")
+    amount = request.form.get("amount", "0")
+
+    try:
+        amount = float(amount)
+        user_id_int = int(user_id)
+    except (ValueError, TypeError):
+        return redirect(f"/profile?user_id={user_id}")
+
+    conn = sqlite3.connect("data/users.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
+    conn.commit()
+    conn.close()
+
+    return redirect(f"/profile?user_id={user_id}")
 
 
 # ── 错误处理 ──
