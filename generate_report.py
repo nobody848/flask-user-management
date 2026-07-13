@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
-"""生成业务逻辑及越权漏洞分析报告"""
+"""生成白胡子 vs 赤犬实力对比分析报告"""
 
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml.ns import qn, nsdecls
-from docx.oxml import parse_xml
+from docx.oxml.ns import qn
 import os
-
-
-def add_code(doc, code_text):
-    p = doc.add_paragraph()
-    p.paragraph_format.left_indent = Cm(0.5)
-    p.paragraph_format.space_before = Pt(4)
-    p.paragraph_format.space_after = Pt(4)
-    run = p.add_run(code_text)
-    run.font.name = 'Courier New'
-    run.font.size = Pt(9)
-    run.font.color.rgb = RGBColor(0x2D, 0x2D, 0x2D)
-    shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="0xF5F5F5"/>')
-    p._p.get_or_add_pPr().append(shading)
 
 
 def add_table(doc, headers, rows, col_widths=None):
@@ -62,531 +48,307 @@ def create_report():
     section.right_margin = Cm(2.5)
 
     # ═══════ 封面 ═══════
-    for _ in range(6):
+    for _ in range(5):
         doc.add_paragraph()
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run('Flask 用户管理系统')
+    run = title.add_run('海贼王 Two Piece')
     run.bold = True; run.font.size = Pt(28)
     run.font.color.rgb = RGBColor(0x1a, 0x1a, 0x2e)
 
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run('业务逻辑及越权漏洞分析报告')
-    run.bold = True; run.font.size = Pt(20)
-    run.font.color.rgb = RGBColor(0x66, 0x7e, 0xea)
+    run = subtitle.add_run('白胡子 vs 赤犬 · 全面实力对比分析报告')
+    run.bold = True; run.font.size = Pt(18)
+    run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
 
     doc.add_paragraph()
     line = doc.add_paragraph()
     line.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = line.add_run('━' * 40)
-    run.font.color.rgb = RGBColor(0x66, 0x7e, 0xea)
+    run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
     doc.add_paragraph()
 
     info = doc.add_paragraph()
     info.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = info.add_run(
-        '项目地址：github.com/nobody848/flask-user-management\n'
-        '分析日期：2026-07-09\n'
-        '分析范围：/profile 路由、/recharge 路由、profile.html 模板'
-    )
+    run = info.add_run('分析日期：2026-07-13')
     run.font.size = Pt(12)
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
     doc.add_page_break()
 
-    # ═══════ 一、分析范围 ═══════
-    doc.add_heading('一、分析范围', level=1)
+    # ═══════ 核心结论 ═══════
+    doc.add_heading('核心结论：白胡子（巅峰期）> 赤犬 > 白胡子（顶上战争期）', level=1)
+
     doc.add_paragraph(
-        '本次分析聚焦于今日新增的两个业务功能：个人中心（/profile）和充值（/recharge）。'
-        '分析维度包括业务逻辑缺陷和越权漏洞，不涉及其他已有功能模块。'
-    )
-
-    add_table(doc,
-        ['功能', '路由', '方法', '描述'],
-        [
-            ['个人中心', '/profile', 'GET', '根据 URL 参数 user_id 展示用户资料'],
-            ['充值', '/recharge', 'POST', '根据表单 user_id 和 amount 修改用户余额'],
-        ],
-        col_widths=[3, 3, 2, 8]
-    )
-
-    doc.add_paragraph()
-    doc.add_heading('1.1 核心代码定位', level=2)
-    doc.add_paragraph('个人中心路由（app.py 第 415-425 行）：')
-    add_code(doc, '''@app.route("/profile")
-@login_required
-def profile():
-    user_id = request.args.get("user_id", "")
-    user_info = get_user_by_id(user_id)
-    if user_info is None:
-        return render_template("profile.html", user=None, error="未找到该用户")
-    return render_template("profile.html", user=user_info, error=None)''')
-
-    doc.add_paragraph('充值路由（app.py 第 428-447 行）：')
-    add_code(doc, '''@app.route("/recharge", methods=["POST"])
-@login_required
-def recharge():
-    user_id = request.form.get("user_id", "")
-    amount = request.form.get("amount", "0")
-    try:
-        amount = float(amount)
-        user_id_int = int(user_id)
-    except (ValueError, TypeError):
-        return redirect(f"/profile?user_id={user_id}")
-    conn = sqlite3.connect("data/users.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
-    conn.commit()
-    conn.close()
-    return redirect(f"/profile?user_id={user_id}")''')
-
-    doc.add_paragraph('充值表单（profile.html 第 22-29 行）：')
-    add_code(doc, '''<form action="/recharge" method="POST" class="recharge-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="user_id" value="{{ user.id }}">
-    <div class="form-group">
-        <label for="amount">充值金额</label>
-        <input type="number" id="amount" name="amount" step="0.01"
-               placeholder="请输入充值金额" class="recharge-input">
-    </div>
-    <button type="submit" class="btn btn-primary">确认充值</button>
-</form>''')
-
-    doc.add_page_break()
-
-    # ═══════ 二、漏洞发现过程 ═══════
-    doc.add_heading('二、漏洞发现过程', level=1)
-    doc.add_paragraph('以下按严重程度从高到低逐一描述每个漏洞的发现过程、攻击路径和修复方案。')
-
-    # ── BL-01 ──
-    doc.add_heading('BL-01：水平越权 — 任意用户资料可被越权查看（高危）', level=2)
-
-    doc.add_heading('1. 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 /profile 路由时发现，user_id 参数完全来自 URL 查询字符串（request.args.get），'
-        '后端没有将当前登录用户与请求查询的 user_id 做任何比对。'
-        '这意味着用户 alice 登录后，只需将 URL 中的 user_id=2 改为 user_id=1，'
-        '即可查看管理员 admin 的完整资料，包括邮箱、手机号和余额。'
-    )
-
-    doc.add_heading('2. 漏洞代码定位', level=3)
-    add_code(doc, '''# ❌ 问题代码：user_id 来源与当前用户无关
-user_id = request.args.get("user_id", "")     # 从 URL 获取，与 session 无关
-user_info = get_user_by_id(user_id)           # 直接查询，无视所有权
-
-# 缺少的关键校验：
-# if str(user_id) != str(session.get("user_id")):
-#     return abort(403)''')
-
-    doc.add_heading('3. 攻击路径推演', level=3)
-    add_table(doc,
-        ['步骤', '操作', '说明'],
-        [
-            ['1', 'alice 登录系统', '以普通用户 alice 身份登录'],
-            ['2', '访问个人中心', '正常 URL：/profile?user_id=2（alice 自己的资料）'],
-            ['3', '修改 URL 参数', '将 URL 改为 /profile?user_id=1'],
-            ['4', '越权查看', 'admin 的邮箱、手机、余额全部展示在页面上'],
-            ['5', '遍历全部用户', '继续修改 user_id=3,4,5... 可枚举所有注册用户信息'],
-        ],
-        col_widths=[1, 3.5, 10]
-    )
-
-    doc.add_heading('4. 危害评级', level=3)
-    add_table(doc,
-        ['维度', '评级', '说明'],
-        [
-            ['攻击复杂度', '极低', '仅需修改浏览器 URL 参数'],
-            ['利用难度', '极低', '无需任何工具，在地址栏操作即可'],
-            ['影响范围', '高', '所有注册用户的个人隐私数据均可被窃取'],
-            ['综合评级', '🔴 高危', 'CVSS 3.x 评分：7.5'],
-        ],
-        col_widths=[3.5, 2, 10]
-    )
-
-    doc.add_heading('5. 修复方案', level=3)
-    doc.add_paragraph('在 /profile 路由中增加身份校验，确保只能查看当前登录用户本人的资料：')
-    add_code(doc, '''@app.route("/profile")
-@login_required
-def profile():
-    user_id = request.args.get("user_id", "")
-    # 获取当前登录用户 ID
-    current_username = session.get("username")
-    current_user = get_user_from_db(current_username)
-    current_user_id = get_user_id_by_username(current_username)  # 需新增此函数
-
-    # 权限校验：只能查看自己的资料
-    if str(user_id) != str(current_user_id):
-        return abort(403)
-
-    user_info = get_user_by_id(user_id)
-    ...''')
-
-    doc.add_paragraph()
-
-    # ── BL-02 ──
-    doc.add_heading('BL-02：水平越权 — 任意用户余额可被他人篡改（高危）', level=2)
-
-    doc.add_heading('1. 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 /recharge 路由时发现，user_id 参数来自表单 POST 数据（request.form.get），'
-        '且充值表单中的 user_id 是一个隐藏的 input 字段。后端既没有验证当前登录用户 '
-        '与充值目标的 user_id 是否匹配，也没有在服务端重新确认 user_id 的真实性。'
-        '攻击者只需修改 HTML 中的隐藏字段值，或直接用 curl 构造 POST 请求，'
-        '即可为任意用户充值或扣减余额。'
-    )
-
-    doc.add_heading('2. 漏洞代码定位', level=3)
-    add_code(doc, '''# ❌ 问题代码：user_id 来自前端隐藏字段，完全不可信
-user_id = request.form.get("user_id", "")   # 隐藏字段容易被篡改
-amount = request.form.get("amount", "0")
-...
-cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
-
-# 缺少的关键校验：
-# 1. 未校验当前用户 == 充值目标用户
-# 2. 未在服务端重新获取 user_id（不应信赖前端传入）''')
-
-    doc.add_heading('3. 攻击路径推演', level=3)
-    add_table(doc,
-        ['步骤', '操作', '说明'],
-        [
-            ['1', 'alice 登录系统', '以普通用户 alice 身份登录'],
-            ['2', '打开个人中心', '正常页面，充值表单的隐藏 user_id=2'],
-            ['3', '修改隐藏字段', '浏览器 DevTools 将 user_id 改为 1（admin 的 ID）'],
-            ['4', '输入金额提交', '充值 -99999 → admin 余额从 99999 变为 0'],
-            ['5', '直接构造请求', 'curl -X POST /recharge -d "user_id=1&amount=-99999"'],
-        ],
-        col_widths=[1, 4, 10]
-    )
-
-    doc.add_heading('4. 危害评级', level=3)
-    add_table(doc,
-        ['维度', '评级', '说明'],
-        [
-            ['攻击复杂度', '极低', '浏览器 DevTools 或 curl 即可完成'],
-            ['利用难度', '极低', '无需任何特殊权限'],
-            ['影响范围', '高', '任意用户的余额可被任意增减，直接造成经济损失'],
-            ['综合评级', '🔴 高危', 'CVSS 3.x 评分：8.1'],
-        ],
-        col_widths=[3.5, 2, 10]
-    )
-
-    doc.add_heading('5. 修复方案', level=3)
-    doc.add_paragraph('充值时应从 session 获取当前用户，并强制只能操作自己的账户：')
-    add_code(doc, '''@app.route("/recharge", methods=["POST"])
-@login_required
-def recharge():
-    amount = request.form.get("amount", "0")
-    # 从 session 获取当前登录用户身份（不信任前端传入的 user_id）
-    current_username = session.get("username")
-    current_user = get_user_from_db(current_username)
-    current_user_id = get_user_id_by_username(current_username)
-
-    try:
-        amount = float(amount)
-    except (ValueError, TypeError):
-        return redirect(f"/profile?user_id={current_user_id}")
-
-    # 只能给自己充值
-    conn = sqlite3.connect("data/users.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?",
-                   (amount, current_user_id))
-    conn.commit()
-    conn.close()
-
-    return redirect(f"/profile?user_id={current_user_id}")''')
-
-    doc.add_paragraph()
-
-    # ── BL-03 ──
-    doc.add_heading('BL-03：业务逻辑缺陷 — 充值金额可正可负（中危）', level=2)
-
-    doc.add_heading('1. 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 /recharge 路由时发现，amount 参数直接从表单获取后转为 float，'
-        '直接执行 SQL 的 balance = balance + amount。代码没有对 amount 做任何正负校验，'
-        '这意味着用户可以提交负数金额来实现"反向充值"——实际是从账户中扣减余额。'
-        '更严重的是，由于 BL-02 的越权漏洞，攻击者可以用负数给任意用户扣款。'
-    )
-
-    doc.add_heading('2. 漏洞代码定位', level=3)
-    add_code(doc, '''# ❌ 问题代码：amount 未做范围校验
-amount = float(amount)    # 用户可传入 -9999999.99
-...
-cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
-# balance = balance + (-9999999.99) → 余额瞬间变负数''')
-
-    doc.add_heading('3. 攻击路径推演', level=3)
-    add_table(doc,
-        ['步骤', '操作', '效果'],
-        [
-            ['1', '登录任意账户', '获取合法 session'],
-            ['2', '提交 amount=-99999', '余额被扣减 99999'],
-            ['3', '反复提交', '余额可被扣到负数甚至 -∞'],
-            ['4', '越权组合利用', '将他人余额扣为负数，实现"抢劫"'],
-        ],
-        col_widths=[1, 4.5, 8.5]
-    )
-
-    doc.add_heading('4. 修复方案', level=3)
-    add_code(doc, '''# ✅ 修复：增加金额正负校验
-try:
-    amount = float(amount)
-    if amount <= 0:
-        return redirect(f"/profile?user_id={user_id}?error=充值金额必须为正数")
-except (ValueError, TypeError):
-    return redirect(f"/profile?user_id={user_id}")''')
-
-    doc.add_paragraph()
-
-    # ── BL-04 ──
-    doc.add_heading('BL-04：信息泄露 — 用户 ID 可被枚举遍历（中危）', level=2)
-
-    doc.add_heading('1. 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 /profile 路由的查询逻辑时发现，user_id 参数使用连续的整数自增 ID，'
-        '且未登录用户无法访问（有 @login_required 保护），但任何已登录用户'
-        '可以通过遍历 user_id 参数来发现系统中有多少注册用户以及他们的详细信息。'
-        '这构成了用户枚举攻击（User Enumeration）。'
-    )
-
-    doc.add_heading('2. 攻击路径推演', level=3)
-    add_code(doc, '''# 使用 curl 脚本遍历所有用户
-for i in $(seq 1 100); do
-  curl -b "session=..." "http://localhost:5000/profile?user_id=$i"
-  # 根据返回内容判断用户是否存在
-done
-# 结果：系统中有哪些用户、各用户的邮箱、手机、余额全部暴露''')
-
-    doc.add_heading('3. 修复方案', level=3)
-    doc.add_paragraph('将连续的整数 ID 替换为 UUID 或随机的用户标识符，或在已修复 BL-01 的基础上，'
-                       '用户只能看到自己的资料，枚举将无法获取他人信息。')
-
-    doc.add_paragraph()
-
-    # ── BL-05 ──
-    doc.add_heading('BL-05：业务逻辑缺陷 — 充值操作无频率限制（低危）', level=2)
-
-    doc.add_heading('1. 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 /recharge 路由时发现，该接口没有任何频率限制。'
-        '虽然登录接口有 check_login_rate_limit()、注册接口有 check_register_rate_limit()，'
-        '但充值接口完全没有任何速率控制。攻击者可以在短时间内发送大量充值请求，'
-        '如果结合 BL-03（负数金额），可以极快地破坏账户余额数据。'
-    )
-
-    doc.add_heading('2. 漏洞代码定位', level=3)
-    add_code(doc, '''# ❌ 问题代码：充值接口完全无频率限制
-@app.route("/recharge", methods=["POST"])
-@login_required
-def recharge():
-    user_id = request.form.get("user_id", "")
-    amount = request.form.get("amount", "0")
-    # ... 缺少频率校验
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", ...)''')
-
-    doc.add_heading('3. 攻击路径推演', level=3)
-    add_code(doc, '''# 每秒发送 100 次扣款请求，5 秒内将余额扣到负数
-for i in $(seq 1 500); do
-  curl -X POST -b "session=..." \\
-    -d "user_id=2&amount=-99999" \\
-    "http://localhost:5000/recharge" &
-done
-wait''')
-
-    doc.add_heading('4. 修复方案', level=3)
-    add_code(doc, '''# ✅ 复用项目已有的频率限制框架
-RECHARGE_ATTEMPTS = {}
-MAX_RECHARGE_ATTEMPTS = 5
-RECHARGE_LOCKOUT_TIME = 60  # 1 分钟
-
-def check_recharge_rate_limit():
-    return _check_rate_limit(RECHARGE_ATTEMPTS, MAX_RECHARGE_ATTEMPTS,
-                             RECHARGE_LOCKOUT_TIME, "recharge")
-
-@app.route("/recharge", methods=["POST"])
-@login_required
-def recharge():
-    if not check_recharge_rate_limit():
-        return redirect("/profile?user_id=当前用户ID&error=操作过于频繁")
-    ...''')
-
-    doc.add_paragraph()
-
-    # ── BL-06 ──
-    doc.add_heading('BL-06：业务逻辑缺陷 — CSRF 防护依赖于前端隐藏字段（低危）', level=2)
-
-    doc.add_heading('1. 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 profile.html 中的充值表单发现，user_id 通过隐藏的 input 字段传递。'
-        '虽然项目已经实现了 CSRF Token 防护，但 user_id 放在隐藏字段中意味着：'
-        '攻击者可以通过浏览器的"查看页面源代码"或 DevTools 轻易获取当前页面的 user_id。'
-        '结合 BL-02 和 BL-03，如果攻击者能诱使用户点击一个构造好的表单，'
-        '就可以利用 CSRF + 越权 + 负金额的组合实现跨站扣款攻击。'
-    )
-
-    doc.add_heading('2. 漏洞代码定位', level=3)
-    add_code(doc, '''<!-- ❌ 问题：user_id 暴露在前端，且未经服务端二次确认 -->
-<input type="hidden" name="user_id" value="{{ user.id }}">
-<!-- 攻击者只需查看页面源代码即可获得此值 -->''')
-
-    doc.add_heading('3. 修复方案', level=3)
-    doc.add_paragraph('user_id 不应依赖前端传入，而应从服务端 session 中获取：')
-    add_code(doc, '''# ✅ 修复：充值表单移除 user_id 隐藏字段
-<form action="/recharge" method="POST" class="recharge-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-group">
-        <label for="amount">充值金额</label>
-        <input type="number" id="amount" name="amount" step="0.01"
-               placeholder="请输入充值金额" class="recharge-input">
-    </div>
-    <button type="submit" class="btn btn-primary">确认充值</button>
-</form>
-
-# 服务端直接从 session 获取充值目标
-current_user_id = session.get("user_id")   # 服务端可靠来源
-cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?",
-               (amount, current_user_id))''')
-
-    doc.add_page_break()
-
-    # ═══════ 三、漏洞汇总 ═══════
-    doc.add_heading('三、漏洞汇总', level=1)
-
-    add_table(doc,
-        ['编号', '漏洞名称', '类型', '严重', '涉及功能'],
-        [
-            ['BL-01', '水平越权 — 任意用户资料可被查看', '越权漏洞', '🔴 高危', '/profile'],
-            ['BL-02', '水平越权 — 任意用户余额可被篡改', '越权漏洞', '🔴 高危', '/recharge'],
-            ['BL-03', '充值金额可正可负（反向扣款）', '业务逻辑', '🟠 中危', '/recharge'],
-            ['BL-04', '用户 ID 可被枚举遍历', '信息泄露', '🟠 中危', '/profile'],
-            ['BL-05', '充值操作无频率限制', '业务逻辑', '🟡 低危', '/recharge'],
-            ['BL-06', 'user_id 暴露在前端隐藏字段', '业务逻辑', '🟡 低危', 'profile.html'],
-        ],
-        col_widths=[1.5, 6, 2.5, 2, 2.5]
+        '经过对两人在漫画原作中的全部表现、设定集数据、以及作者尾田荣一郎的访谈内容进行综合分析，'
+        '结论如下：\n\n'
+        '■ 如果以巅峰期（罗杰时代的"世界最强男人"）为参照，白胡子远强于赤犬。'
+        '巅峰白胡子是与海贼王罗杰齐名的传说级海贼，其实力足以毁灭世界，'
+        '被官方设定为"世界上最强的男人"，拥有毁灭世界的力量。\n\n'
+        '■ 如果以顶上战争时期（74岁带病参战）的白胡子为参照，赤犬在正面战斗中占据上风。'
+        '顶上战争中白胡子已身患重病、全身插满输液管，无法使用武装色霸气，'
+        '反应速度和力量均大幅下降。即便如此，白胡子仍然重伤了赤犬，'
+        '将其打得吐血陷入地底裂缝。\n\n'
+        '■ 综合来看，"白胡子"的名号包含两个状态——巅峰期和顶上战争期。'
+        '巅峰白胡子碾压赤犬，而顶上战争白胡子略逊于赤犬。但考虑到白胡子是在'
+        '身负重伤（被斯库亚德刺穿）、重病缠身、无法使用霸气的极端不利条件下作战，'
+        '如果双方都处于公平状态，白胡子的实力应当在赤犬之上。'
     )
 
     doc.add_page_break()
 
-    # ═══════ 四、越权攻击路径全景 ═══════
-    doc.add_heading('四、越权攻击路径全景', level=1)
-
-    doc.add_paragraph('以下展示从攻击者视角出发，各漏洞之间如何串联形成完整的攻击链：')
-
-    doc.add_heading('攻击链 1：越权窃取信息', level=2)
+    # ═══════ 一、基本资料对比 ═══════
+    doc.add_heading('一、基本资料对比', level=1)
     add_table(doc,
-        ['步骤', '操作', '利用漏洞'],
+        ['项目', '白胡子（爱德华·纽盖特）', '赤犬（萨卡斯基）'],
         [
-            ['1', '登录系统获取合法 session', '正常登录功能'],
-            ['2', '遍历 /profile?user_id=1,2,3...', 'BL-01 水平越权 + BL-04 ID枚举'],
-            ['3', '获取所有用户资料', '邮箱、手机号可用于钓鱼或撞库'],
-        ],
-        col_widths=[1, 8, 6]
-    )
-
-    doc.add_heading('攻击链 2：越权篡改余额', level=2)
-    add_table(doc,
-        ['步骤', '操作', '利用漏洞'],
-        [
-            ['1', '登录系统获取合法 session', '正常登录功能'],
-            ['2', '提交 POST /recharge', '无频率限制 BL-05'],
-            ['3', '修改隐藏字段 user_id=目标用户ID', 'BL-02 越权充值'],
-            ['4', '填入负数 amount=-99999', 'BL-03 负金额扣款'],
-            ['5', '目标用户余额被清空或变为负数', '直接经济损失'],
-        ],
-        col_widths=[1, 8, 6]
-    )
-
-    doc.add_heading('攻击链 3：组合攻击 — 全面破坏', level=2)
-    add_table(doc,
-        ['步骤', '操作', '利用漏洞'],
-        [
-            ['1', '编写自动化脚本', 'BL-04 枚举获得全部 user_id'],
-            ['2', '遍历所有用户扣款', 'BL-02 + BL-03 + BL-05 叠加利用'],
-            ['3', '系统所有用户余额归零', '业务完全瘫痪'],
-            ['4', '数据库余额出现负数', '后续业务逻辑混乱'],
-        ],
-        col_widths=[1, 8, 6]
-    )
-
-    doc.add_page_break()
-
-    # ═══════ 五、漏洞成因分析 ═══════
-    doc.add_heading('五、漏洞成因分析', level=1)
-
-    doc.add_heading('5.1 根因：信赖客户端传入的用户标识', level=2)
-    doc.add_paragraph(
-        '所有越权漏洞的根源在于：系统使用客户端传入的 user_id 作为用户身份标识，'
-        '而没有与服务端 session 中保存的用户身份进行比对。'
-        '在 Web 安全中，任何来自客户端的数据（URL 参数、表单字段、Cookie、HTTP 头）'
-        '都是不可信的，必须经过服务端验证后方可使用。'
-    )
-
-    doc.add_heading('5.2 数据流对比', level=2)
-    doc.add_paragraph('信任链分析（修复前 vs 修复后）：')
-    add_table(doc,
-        ['环节', '修复前（不安全）', '修复后（安全）'],
-        [
-            ['user_id 来源', 'URL 参数 / 表单隐藏字段（客户端可控）', 'Session（服务端存储，客户端不可篡改）'],
-            ['身份校验', '无', '比对 session 中的用户身份与操作目标'],
-            ['amount 校验', '无（正负均可）', '校验 amount > 0'],
-            ['频率限制', '无', '复用 _check_rate_limit 框架'],
+            ['称号', '世界最强的男人', '海军元帅（原大将）'],
+            ['悬赏金', '50亿4640万贝利', '不适用（海军）'],
+            ['恶魔果实', '震震果实（超人系）', '岩浆果实（自然系）'],
+            ['霸气', '霸王色·武装色·见闻色', '武装色·见闻色（无霸王色）'],
+            ['巅峰年龄', '约40-50岁', '约55岁（顶上战争时）'],
+            ['身高', '666cm', '306cm'],
+            ['所属', '白胡子海贼团（船长）', '海军本部（大将/元帅）'],
+            ['声名', '与罗杰齐名的传说海贼', '绝对正义的海军最高战力'],
         ],
         col_widths=[3, 6, 6]
     )
 
-    doc.add_heading('5.3 OWASP 分类映射', level=2)
+    doc.add_paragraph()
+
+    # ═══════ 二、恶魔果实能力对比 ═══════
+    doc.add_heading('二、恶魔果实能力对比', level=1)
+
+    doc.add_heading('2.1 震震果实 vs 岩浆果实', level=2)
     add_table(doc,
-        ['OWASP 类别', '对应漏洞', '说明'],
+        ['维度', '震震果实（白胡子）', '岩浆果实（赤犬）'],
         [
-            ['A01:2024-Broken Access Control', 'BL-01, BL-02', '未对用户操作进行权限校验'],
-            ['A04:2024-Insecure Design', 'BL-03, BL-05, BL-06', '业务逻辑设计缺陷'],
-            ['A05:2024-Security Misconfiguration', 'BL-04', '使用可枚举的连续整数 ID'],
+            ['果实类型', '超人系', '自然系'],
+            ['能力本质', '震动一切物质和空间', '产生和控制岩浆'],
+            ['攻击范围', '全球级（引发海啸、地震）', '岛屿级（流星火山）'],
+            ['破坏力评级', 'SSS（被认为拥有毁灭世界的力量）', 'SS（最高攻击力的自然系）'],
+            ['物理伤害', '冲击波、空间裂缝、海啸', '岩浆拳、岩浆弹、熔化万物'],
+            ['附加效果', '引发海啸、地裂、大气震动', '高温熔化、持续灼烧伤害'],
+            ['元素化免疫', '否（超人系）', '是（自然系，可免疫物理攻击）'],
         ],
-        col_widths=[6, 3.5, 5.5]
+        col_widths=[3, 6, 6]
     )
 
-    doc.add_page_break()
-
-    # ═══════ 六、修复建议总结 ═══════
-    doc.add_heading('六、修复建议总结', level=1)
-
-    add_table(doc,
-        ['#', '修复项', '对应漏洞', '优先级'],
-        [
-            ['1', 'profile 路由增加身份校验：只能查看自己的资料', 'BL-01', '🔴 立即'],
-            ['2', 'recharge 路由从 session 获取用户身份，不信任前端 user_id', 'BL-02', '🔴 立即'],
-            ['3', 'amount 仅接受正数，拒绝 <=0 的充值请求', 'BL-03', '🟠 尽快'],
-            ['4', '使用 UUID 替代自增 ID 或配合身份校验防止枚举', 'BL-04', '🟠 尽快'],
-            ['5', '添加上限频率限制（如 5 次/分钟）', 'BL-05', '🟡 建议'],
-            ['6', '充值表单移除 user_id 隐藏字段', 'BL-06', '🟡 建议'],
-        ],
-        col_widths=[1, 10, 3, 2]
+    doc.add_heading('2.2 能力克制分析', level=2)
+    doc.add_paragraph(
+        '岩浆果实被官方设定为"自然系中最高攻击力"，但震震果实的破坏力在设定上是'
+        '"足以毁灭世界"的级别。从破坏力上限来看，震震果实远高于岩浆果实。'
+        '白胡子在顶上战争中一拳震裂马林梵多的整个海湾，随手引发数十米高的海啸，'
+        '甚至将海军本部的大气层都震出裂缝——这是赤犬的岩浆能力无法企及的破坏规模。\n\n'
+        '然而，岩浆果实的元素化特性为赤犬提供了额外的防御优势。'
+        '白胡子的物理攻击（如薙刀砍击）无法直接命中赤犬的本体，'
+        '必须使用武装色霸气才能触碰到自然系能力者。而顶上战争时期的白胡子'
+        '由于重病和年龄原因，霸气使用极为有限。'
     )
 
     doc.add_paragraph()
 
+    # ═══════ 三、霸气能力对比 ═══════
+    doc.add_heading('三、霸气能力对比', level=1)
+    add_table(doc,
+        ['霸气类型', '白胡子', '赤犬'],
+        [
+            ['霸王色霸气', '✅ 拥有（顶级水准）', '❌ 未展现'],
+            ['武装色霸气', '✅ 拥有（巅峰期顶级）', '✅ 拥有（大将级）'],
+            ['见闻色霸气', '✅ 拥有', '✅ 拥有（大将级）'],
+        ],
+        col_widths=[4, 5.5, 5.5]
+    )
+
+    doc.add_paragraph(
+        '霸王色霸气是决定性差距之一。白胡子拥有顶级的霸王色霸气，'
+        '这是"王者资质"的证明，全球仅有极少数人能拥有。赤犬虽然实力强大，'
+        '但从未展现过霸王色霸气。霸王色霸气不仅可以威吓杂兵，'
+        '在高端对战中还可以缠绕在攻击上大幅提升威力。\n\n'
+        '值得注意的是，顶上战争中的白胡子由于身体条件限制，'
+        '几乎无法有效使用霸气，这是他在战斗中处于下风的关键原因之一。'
+        '巅峰白胡子若能够充分发挥三色霸气+震震果实的能力组合，'
+        '其实力将远超赤犬。'
+    )
+
+    doc.add_page_break()
+
+    # ═══════ 四、战斗实绩对比 ═══════
+    doc.add_heading('四、战斗实绩对比', level=1)
+
+    doc.add_heading('4.1 顶上战争正面交锋', level=2)
+    doc.add_paragraph(
+        '白胡子和赤犬在顶上战争中有两次直接交手：\n\n'
+        '第一次交锋：白胡子在重伤状态下（被斯库亚德刺穿胸膛）从背后突袭赤犬，'
+        '一拳将其击倒并打入地底裂缝。赤犬被打得口吐鲜血，一度失去战斗能力。'
+        '这是整个顶上战争中海军大将受到的最严重伤害。\n\n'
+        '第二次交锋：赤犬从地底钻出后，趁白胡子不备，用岩浆拳打穿白胡子的胸膛，'
+        '并烧毁了白胡子半张脸。白胡子在受到致命伤后，仍然用最后一击将赤犬'
+        '再次击飞，并将海军本部震裂。随后白胡子站立而亡，背部没有一处伤口。'
+    )
+
+    doc.add_heading('4.2 主要战绩对比', level=2)
+    add_table(doc,
+        ['对手/事件', '白胡子的战绩', '赤犬的战绩'],
+        [
+            ['对战罗杰', '多次交战，不分胜负（巅峰期）', '未交手'],
+            ['对战金狮子', '击败金狮子舰队', '未交手'],
+            ['对战战国/卡普', '多次交战，不分胜负', '同僚关系'],
+            ['对战白胡子（顶上）', '—', '重伤白胡子（但白胡子已濒死）'],
+            ['对战艾斯', '—', '击杀艾斯'],
+            ['对战青雉', '—', '激战10天获胜，晋升元帅'],
+            ['对战路飞', '照顾并保护', '追杀，几乎击杀'],
+            ['对战马尔科等队长', '—', '压制全体队长'],
+            ['对战国/香克斯', '与香克斯把酒言欢', '被香克斯一剑挡下攻击'],
+        ],
+        col_widths=[4.5, 5, 5.5]
+    )
+
+    doc.add_paragraph()
+
+    # ═══════ 五、综合实力维度评分 ═══════
+    doc.add_heading('五、综合实力维度评分', level=1)
+    doc.add_paragraph('评分标准：满分 10 分，以巅峰状态为参照。括号内为顶上战争时期评分。')
+
+    add_table(doc,
+        ['维度', '白胡子', '赤犬', '优势方'],
+        [
+            ['攻击力', '10（8）', '9', '白胡子（巅峰）'],
+            ['防御力', '9（6）', '8', '白胡子（巅峰）'],
+            ['速度/反应', '8（4）', '9', '赤犬'],
+            ['耐力/续航', '9（5）', '9', '持平'],
+            ['果实开发', '10（8）', '9', '白胡子（巅峰）'],
+            ['霸气强度', '10（5）', '8', '白胡子（巅峰）'],
+            ['战斗经验', '10', '9', '白胡子'],
+            ['破坏范围', '10（9）', '8', '白胡子'],
+            ['战略头脑', '8', '9', '赤犬'],
+            ['意志力', '10', '9', '白胡子'],
+            ['综合得分', '94（67）', '87', '白胡子（巅峰）'],
+        ],
+        col_widths=[3.5, 3, 3, 4.5]
+    )
+
+    doc.add_paragraph()
+    doc.add_paragraph(
+        '从综合得分可以看出：巅峰白胡子 94 分 > 赤犬 87 分 > 顶上白胡子 67 分。'
+        '赤犬虽然在顶上战争中击败了白胡子，但击败的是一个实力仅剩巅峰期 70% 左右的'
+        '重病老人。如果两人都处于巅峰状态，白胡子的胜算在八成以上。'
+    )
+
+    doc.add_page_break()
+
+    # ═══════ 六、决定性因素分析 ═══════
+    doc.add_heading('六、决定性因素分析', level=1)
+
+    doc.add_heading('6.1 白胡子占优势的因素', level=2)
+    factors = [
+        ('破坏力上限', '震震果实拥有毁灭世界的力量，这是海贼王世界中最高级别的破坏力描述。'
+         '赤犬的岩浆果实虽然攻击力在自然系中顶尖，但其破坏规模上限无法与震震果实相比。'),
+        ('霸王色霸气', '白胡子拥有顶级霸王色霸气，这是赤犬所不具备的。霸王色缠绕可以将攻击力'
+         '提升到另一个层次，巅峰白胡子的攻击配上霸王色缠绕，赤犬难以正面抵挡。'),
+        ('战斗经验', '白胡子从青年时期起就是世界顶级海贼，与罗杰、金狮子等传说级人物多次交手，'
+         '战斗经验比赤犬丰富数十年。'),
+        ('身体素质', '巅峰白胡子的身体素质是怪物级的，666cm的巨人般体格赋予了他在力量上的绝对优势。'),
+        ('领袖魅力', '白胡子拥有让所有船员心甘情愿称为"老爹"的人格魅力，这种意志力在战斗中转化为'
+         '不屈不挠的战斗意志，即使身受重伤也绝不倒下。'),
+    ]
+    for title, desc in factors:
+        p = doc.add_paragraph()
+        run = p.add_run(f'• {title}：')
+        run.bold = True
+        p.add_run(desc)
+
+    doc.add_heading('6.2 赤犬占优势的因素', level=2)
+    factors = [
+        ('元素化防御', '自然系岩浆果实的元素化特性让赤犬在面对非霸气攻击时完全免疫。'
+         '顶上战争中白胡子因无法有效使用霸气，多数攻击无法直接命中赤犬本体。'),
+        ('果实属性优势', '岩浆果实被官方设定为"自然系中最高攻击力"，其高温属性可以对绝大多数'
+         '对手造成持续的灼烧伤害，且烧伤难以愈合。'),
+        ('战斗状态', '顶上战争时的赤犬处于巅峰年龄和全盛状态，而白胡子已经74岁高龄且重病缠身。'
+         '年轻和健康是战斗中不可忽视的优势。'),
+        ('战术思维', '赤犬在战斗中善于利用策略（如利用斯库亚德刺杀白胡子），'
+         '而白胡子更倾向于正面碾压。'),
+    ]
+    for title, desc in factors:
+        p = doc.add_paragraph()
+        run = p.add_run(f'• {title}：')
+        run.bold = True
+        p.add_run(desc)
+
+    doc.add_paragraph()
+
+    # ═══════ 七、不同场景推演 ═══════
+    doc.add_heading('七、不同场景战斗推演', level=1)
+
+    doc.add_heading('场景一：巅峰白胡子 vs 赤犬', level=2)
+    doc.add_paragraph(
+        '巅峰白胡子（40-50岁）拥有完整的武装色、见闻色和霸王色霸气，震震果实能力全开。'
+        '赤犬的岩浆攻击无法击破白胡子覆盖了武装色霸气的身体，'
+        '而白胡子的震震拳配上霸王色缠绕可以轻易突破赤犬的元素化防御。'
+        '战斗结果：白胡子胜率 85%，赤犬胜率 15%。'
+    )
+
+    doc.add_heading('场景二：顶上战争白胡子 vs 赤犬（实际战况）', level=2)
+    doc.add_paragraph(
+        '74岁重病白胡子无法使用霸气，身体反应迟钝，且已受致命伤。'
+        '赤犬利用元素化免疫了绝大部分物理攻击，用岩浆果实的高温优势持续消耗。'
+        '但即使如此，白胡子仍然两次将赤犬击倒，最后一次更是让赤犬在数分钟内无法起身。'
+        '战斗结果：赤犬胜（但属于惨胜，若非白胡子先被斯库亚德刺伤，结果可能不同）。'
+    )
+
+    doc.add_heading('场景三：公平对决（同状态、无干扰）', level=2)
+    doc.add_paragraph(
+        '假设两人都处于同等状态（年龄相同、健康相同、无第三方干扰），'
+        '那么白胡子的三色霸气+震震果实的组合将全面压制赤犬的岩浆果实。'
+        '特别是白胡子的霸王色缠绕——这是连四皇都极为倚重的顶级战斗技能——'
+        '赤犬没有相应的手段来对抗。'
+        '战斗结果：白胡子胜率 75%，赤犬胜率 25%。'
+    )
+
+    doc.add_page_break()
+
+    # ═══════ 八、结论与评级 ═══════
+    doc.add_heading('八、最终评级', level=1)
+
+    add_table(doc,
+        ['级别', '定义', '代表人物', '战力范围'],
+        [
+            ['SSS+', '传说级（海贼王级别）', '罗杰、巅峰白胡子', '10万+'],
+            ['SSS', '传说级门槛', '战国、卡普（巅峰）', '9-10万'],
+            ['SS', '四皇/元帅级', '赤犬、凯多、大妈、香克斯', '7-9万'],
+            ['S+', '顶级大将/皇副级', '青雉、黄猿、贝克曼', '5-7万'],
+        ],
+        col_widths=[2, 4.5, 5, 3]
+    )
+
+    doc.add_paragraph()
+    doc.add_paragraph(
+        '■ 巅峰白胡子：SSS+ 级。与罗杰并列的传说级，拥有毁灭世界的力量，'
+        '是官方认证的"世界最强的男人"。\n\n'
+        '■ 顶上战争白胡子：SS 级。虽然实力大幅下降，但依然能压制海军大将，'
+        '只是面对赤犬时因无法使用霸气和身体重伤而落败。\n\n'
+        '■ 赤犬：SS 级。海军最高战力，击败青雉晋升元帅，'
+        '攻击力在自然系中首屈一指。但他的实力上限被没有霸王色霸气所限制。\n\n'
+        '■ 最终结论：白胡子（巅峰期）> 赤犬 > 白胡子（顶上战争期）。'
+        '"世界上最强的男人"的名号当之无愧，即使在 74 岁高龄带病上阵，'
+        '仍然能重创海军最高战力——如果他处于巅峰状态，'
+        '赤犬不会有一丝胜算。'
+    )
+
+    doc.add_paragraph()
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run('━' * 40)
     run.font.color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
-
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run('报告生成日期：2026-07-09')
-    run.font.size = Pt(10)
-    run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
-
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run('分析方式：Manual Code Review + Attack Path Simulation')
+    run = p.add_run('报告生成日期：2026-07-13')
     run.font.size = Pt(10)
     run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
     # ── 保存 ──
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_path = os.path.join(script_dir, 'static', '业务逻辑及越权漏洞分析报告.docx')
+    output_path = os.path.join(script_dir, 'static', '白胡子vs赤犬实力对比分析报告.docx')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     doc.save(output_path)
     print(f'报告已生成：{output_path}')
