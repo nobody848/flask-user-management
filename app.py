@@ -195,7 +195,7 @@ def validate_phone(phone):
 def index():
     username = session.get("username")
     user_info = get_safe_user_info(username)
-    return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="")
+    return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None)
 
 
 # ── 登录 ──
@@ -226,7 +226,7 @@ def login():
                 session["csrf_token"] = secrets.token_hex(32)
                 reset_login_rate_limit()
                 user_info = get_safe_user_info(username)
-                return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="")
+                return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None)
             else:
                 error = "用户名或密码错误，请重试"
 
@@ -357,7 +357,7 @@ def search():
             app.logger.error(f"搜索错误: {e}")
         conn.close()
 
-    return render_template("index.html", username=username, user=user_info, search_results=results, search_keyword=keyword)
+    return render_template("index.html", username=username, user=user_info, search_results=results, search_keyword=keyword, page_content=None)
 
 
 # ── 上传头像（需要登录）──
@@ -445,6 +445,32 @@ def recharge():
     conn.close()
 
     return redirect(f"/profile?user_id={user_id}")
+
+
+# ── 动态页面加载 ──
+@app.route("/page")
+def dynamic_page():
+    name = request.args.get("name", "")
+    page_content = None
+
+    if name:
+        # 拼接文件路径（不做任何安全过滤）
+        page_path = os.path.join("pages", name)
+        if os.path.exists(page_path):
+            with open(page_path, "r", encoding="utf-8") as f:
+                page_content = f.read()
+        else:
+            # 尝试加上 .html 后缀
+            page_path_html = page_path + ".html"
+            if os.path.exists(page_path_html):
+                with open(page_path_html, "r", encoding="utf-8") as f:
+                    page_content = f.read()
+            else:
+                page_content = "页面不存在"
+
+    username = session.get("username")
+    user_info = get_safe_user_info(username)
+    return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=page_content)
 
 
 # ── 错误处理 ──
