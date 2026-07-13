@@ -23,10 +23,16 @@ app.config.update(
 # ── 登录频率限制 ──
 LOGIN_ATTEMPTS = {}  # IP -> [count, first_attempt_time]
 REGISTER_ATTEMPTS = {}  # IP -> [count, first_attempt_time]
+PAGE_ATTEMPTS = {}  # IP -> [count, first_attempt_time]
+RECHARGE_ATTEMPTS = {}  # IP -> [count, first_attempt_time]
 MAX_LOGIN_ATTEMPTS = 5
 MAX_REGISTER_ATTEMPTS = 3
+MAX_PAGE_ATTEMPTS = 30
+MAX_RECHARGE_ATTEMPTS = 5
 LOGIN_LOCKOUT_TIME = 300  # 5 分钟
 REGISTER_LOCKOUT_TIME = 600  # 10 分钟
+PAGE_LOCKOUT_TIME = 60  # 1 分钟
+RECHARGE_LOCKOUT_TIME = 60  # 1 分钟
 
 
 def check_login_rate_limit():
@@ -37,6 +43,16 @@ def check_login_rate_limit():
 def check_register_rate_limit():
     """检查注册频率，防止批量注册"""
     return _check_rate_limit(REGISTER_ATTEMPTS, MAX_REGISTER_ATTEMPTS, REGISTER_LOCKOUT_TIME, "register")
+
+
+def check_page_rate_limit():
+    """检查页面加载频率"""
+    return _check_rate_limit(PAGE_ATTEMPTS, MAX_PAGE_ATTEMPTS, PAGE_LOCKOUT_TIME, "page")
+
+
+def check_recharge_rate_limit():
+    """检查充值频率"""
+    return _check_rate_limit(RECHARGE_ATTEMPTS, MAX_RECHARGE_ATTEMPTS, RECHARGE_LOCKOUT_TIME, "recharge")
 
 
 def _check_rate_limit(attempts_dict, max_attempts, lockout_time, label):
@@ -110,21 +126,25 @@ init_db()
 
 def get_user_from_db(username):
     """从数据库获取用户信息"""
-    conn = sqlite3.connect("data/users.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT username, password, email, phone, role, balance FROM users WHERE username = ?", (username,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return {
-            "username": row[0],
-            "password": row[1],
-            "email": row[2],
-            "phone": row[3],
-            "role": row[4],
-            "balance": row[5],
-        }
-    return None
+    conn = None
+    try:
+        conn = sqlite3.connect("data/users.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, password, email, phone, role, balance FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "username": row[0],
+                "password": row[1],
+                "email": row[2],
+                "phone": row[3],
+                "role": row[4],
+                "balance": row[5],
+            }
+        return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_safe_user_info(username):
@@ -141,21 +161,25 @@ def get_user_by_id(user_id):
         user_id = int(user_id)
     except (ValueError, TypeError):
         return None
-    conn = sqlite3.connect("data/users.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, username, email, phone, role, balance FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return {
-            "id": row[0],
-            "username": row[1],
-            "email": row[2],
-            "phone": row[3],
-            "role": row[4],
-            "balance": row[5],
-        }
-    return None
+    conn = None
+    try:
+        conn = sqlite3.connect("data/users.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, email, phone, role, balance FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "username": row[1],
+                "email": row[2],
+                "phone": row[3],
+                "role": row[4],
+                "balance": row[5],
+            }
+        return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def validate_username(username):
@@ -311,6 +335,7 @@ def register():
         else:
             # 使用参数化查询防止 SQL 注入，密码哈希存储
             password_hash = generate_password_hash(password)
+            conn = None
             try:
                 conn = sqlite3.connect("data/users.db")
                 cursor = conn.cursor()
@@ -319,7 +344,6 @@ def register():
                     (username, password_hash, email, phone)
                 )
                 conn.commit()
-                conn.close()
                 # 刷新 CSRF Token
                 session["csrf_token"] = secrets.token_hex(32)
                 return redirect("/login?msg=注册成功，请登录")
@@ -328,6 +352,9 @@ def register():
             except Exception as e:
                 app.logger.error(f"注册失败: {e}")
                 error = "注册失败，请稍后重试"
+            finally:
+                if conn:
+                    conn.close()
 
     return render_template("register.html", error=error)
 
@@ -345,9 +372,10 @@ def search():
         # 使用参数化查询防止 SQL 注入
         like_pattern = f"%{keyword}%"
         print(f"[SQL] SELECT id, username, email, phone FROM users WHERE username LIKE ? OR email LIKE ?  [参数: '{like_pattern}']")
-        conn = sqlite3.connect("data/users.db")
-        cursor = conn.cursor()
+        conn = None
         try:
+            conn = sqlite3.connect("data/users.db")
+            cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, username, email, phone FROM users WHERE username LIKE ? OR email LIKE ?",
                 (like_pattern, like_pattern)
@@ -355,7 +383,9 @@ def search():
             results = cursor.fetchall()
         except Exception as e:
             app.logger.error(f"搜索错误: {e}")
-        conn.close()
+        finally:
+            if conn:
+                conn.close()
 
     return render_template("index.html", username=username, user=user_info, search_results=results, search_keyword=keyword, page_content=None)
 
@@ -429,6 +459,10 @@ def profile():
 @app.route("/recharge", methods=["POST"])
 @login_required
 def recharge():
+    # 检查充值频率
+    if not check_recharge_rate_limit():
+        return redirect("/profile?user_id=1")
+
     user_id = request.form.get("user_id", "")
     amount = request.form.get("amount", "0")
 
@@ -438,11 +472,15 @@ def recharge():
     except (ValueError, TypeError):
         return redirect(f"/profile?user_id={user_id}")
 
-    conn = sqlite3.connect("data/users.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = sqlite3.connect("data/users.db")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id_int))
+        conn.commit()
+    finally:
+        if conn:
+            conn.close()
 
     return redirect(f"/profile?user_id={user_id}")
 
@@ -453,7 +491,10 @@ def dynamic_page():
     name = request.args.get("name", "")
     page_content = None
 
-    if name:
+    # 检查页面加载频率
+    if not check_page_rate_limit():
+        page_content = "请求过于频繁，请稍后再试"
+    elif name:
         # 拼接文件路径（不做任何安全过滤）
         page_path = os.path.join("pages", name)
         if os.path.exists(page_path):
@@ -477,6 +518,11 @@ def dynamic_page():
 @app.errorhandler(404)
 def not_found(e):
     return render_template("base.html"), 404
+
+
+@app.errorhandler(413)
+def request_entity_too_large(e):
+    return render_template("base.html"), 413
 
 
 if __name__ == "__main__":
