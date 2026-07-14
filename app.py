@@ -234,6 +234,12 @@ def login():
             error = "登录尝试过于频繁，请5分钟后再试"
             return render_template("login.html", error=error, msg=msg)
 
+        # CSRF 校验
+        form_token = request.form.get("csrf_token", "")
+        if not form_token or form_token != session.get("csrf_token"):
+            error = "表单验证失败，请重试"
+            return render_template("login.html", error=error, msg=msg)
+
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
@@ -459,6 +465,11 @@ def profile():
 @app.route("/recharge", methods=["POST"])
 @login_required
 def recharge():
+    # CSRF 校验
+    form_token = request.form.get("csrf_token", "")
+    if not form_token or form_token != session.get("csrf_token"):
+        return redirect("/profile?user_id=1")
+
     # 检查充值频率
     if not check_recharge_rate_limit():
         return redirect("/profile?user_id=1")
