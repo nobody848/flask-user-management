@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成文件上传漏洞修复与测试报告"""
+"""生成CSRF漏洞报告"""
 
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
@@ -71,7 +71,7 @@ def create_report():
 
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run('文件上传漏洞修复与测试报告')
+    run = subtitle.add_run('CSRF 漏洞报告')
     run.bold = True; run.font.size = Pt(20)
     run.font.color.rgb = RGBColor(0x66, 0x7e, 0xea)
 
@@ -87,321 +87,306 @@ def create_report():
     run = info.add_run(
         '项目地址：github.com/nobody848/flask-user-management\n'
         '报告日期：2026-07-13\n'
-        '分析范围：/upload 路由 · safe_filename 函数 · static/uploads/ 目录\n'
-        '提交哈希：352b3b6'
+        '审计范围：全部 POST 路由的 CSRF 防护\n'
+        '提交哈希：11c2643'
     )
     run.font.size = Pt(12)
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
     doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 一、文件上传功能概述
+    # 一、CSRF 攻击原理
     # ══════════════════════════════════════
-    doc.add_heading('一、文件上传功能概述', level=1)
+    doc.add_heading('一、CSRF 攻击原理', level=1)
 
     doc.add_paragraph(
-        '用户头像上传功能是在已有登录、注册、搜索功能基础上新增的模块。'
-        '用户登录后可通过导航栏或首页进入上传页面，选择本地文件上传至服务器，'
-        '上传成功后页面显示图片预览和访问链接。'
+        'CSRF（Cross-Site Request Forgery，跨站请求伪造）是一种 Web 安全攻击，'
+        '攻击者诱导已登录用户访问恶意页面，该页面自动向目标网站发送伪造请求，'
+        '利用用户的登录状态执行未授权操作。'
+    )
+
+    doc.add_paragraph('CSRF 攻击的四个必要条件：')
+    conds = [
+        '目标网站仅靠 Cookie 识别用户身份',
+        '目标网站的 POST 请求没有额外的验证令牌',
+        '用户当前在目标网站处于登录状态',
+        '攻击者可以构造并发送完整的跨站请求',
+    ]
+    for c in conds:
+        doc.add_paragraph(c, style='List Bullet')
+
+    doc.add_paragraph('攻击流程图：')
+    add_code(doc, '''攻击者网站                   用户浏览器                  目标网站
+    |                           |                          |
+    |--- 1. 诱导用户访问 ------->|                          |
+    |                           |--- 2. 自动发送 POST ----->|
+    |                           |    (携带用户 Cookie)      |
+    |                           |                          |--- 3. 无 CSRF Token
+    |                           |                          |    校验 → 执行操作
+    |                           |<-- 4. 操作成功 ----------|
+    |                           |    (用户不知情)           |''')
+
+    doc.add_page_break()
+
+    # ══════════════════════════════════════
+    # 二、CSRF 防护现状
+    # ══════════════════════════════════════
+    doc.add_heading('二、项目 CSRF 防护现状', level=1)
+
+    doc.add_paragraph('本项目使用自定义 CSRF Token 机制：')
+    doc.add_paragraph('① 用户在访问任意页面时，由 before_request 钩子自动生成 64 位随机十六进制 Token 存入 session', style='List Bullet')
+    doc.add_paragraph('② 通过 context_processor 将 Token 注入到所有模板的 {{ csrf_token }} 变量中', style='List Bullet')
+    doc.add_paragraph('③ 表单通过隐藏字段 <input name="csrf_token" value="{{ csrf_token }}"> 提交 Token', style='List Bullet')
+    doc.add_paragraph('④ 服务端接收请求后比对 form_token 与 session 中的 csrf_token 是否一致', style='List Bullet')
+
+    add_code(doc, '''# CSRF Token 生成（app.py 第 270-282 行）
+@app.before_request
+def generate_csrf_token():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+
+def get_csrf_token():
+    return session.get("csrf_token", "")
+
+@app.context_processor
+def inject_csrf_token():
+    return dict(csrf_token=get_csrf_token())''')
+
+    doc.add_page_break()
+
+    # ══════════════════════════════════════
+    # 三、漏洞发现过程
+    # ══════════════════════════════════════
+    doc.add_heading('三、漏洞发现过程', level=1)
+
+    doc.add_paragraph(
+        '对项目中所有 POST 路由逐一审查，检查每个路由是否在服务端验证了 csrf_token。'
+        '共审查 5 个 POST 路由：'
     )
 
     add_table(doc,
-        ['项目', '说明'],
+        ['路由', '表单 Token', '服务端校验', '结论'],
         [
-            ['路由', '/upload (GET + POST)'],
-            ['登录保护', '@login_required 装饰器，未登录跳转 /login'],
-            ['文件大小限制', 'MAX_CONTENT_LENGTH = 16MB'],
-            ['存储路径', 'static/uploads/{username}/{原始文件名}'],
-            ['安全校验', 'CSRF Token 验证'],
-            ['文件名处理', 'safe_filename() 移除路径遍历字符'],
+            ['POST /login', '✅ 已携带', '❌ 未校验', 'CSRF-01'],
+            ['POST /register', '✅ 已携带', '✅ 已校验', '安全'],
+            ['POST /upload', '✅ 已携带', '✅ 已校验', '安全'],
+            ['POST /recharge', '✅ 已携带', '❌ 未校验', 'CSRF-02'],
+            ['POST /change-password', '❌ 无（需求决定）', '❌ 无（需求决定）', '按设计'],
         ],
-        col_widths=[4, 12]
+        col_widths=[4, 3, 3, 3.5]
     )
 
     doc.add_paragraph()
-    doc.add_paragraph('相关源代码文件：', style='List Bullet')
-    doc.add_paragraph('app.py — upload 路由（第 393-442 行）及 safe_filename 函数（第 397-405 行）', style='List Bullet')
-    doc.add_paragraph('templates/upload.html — 上传页面模板', style='List Bullet')
-    doc.add_paragraph('static/uploads/ — 文件存储根目录', style='List Bullet')
-    doc.add_paragraph('static/css/style.css — 上传页面样式（第 269-308 行）', style='List Bullet')
 
-    doc.add_page_break()
+    # ── CSRF-01 ──
+    doc.add_heading('CSRF-01：登录接口缺少 CSRF 校验（高危）', level=2)
 
-    # ══════════════════════════════════════
-    # 二、上传功能代码详解
-    # ══════════════════════════════════════
-    doc.add_heading('二、上传功能代码详解', level=1)
-
-    doc.add_heading('2.1 safe_filename 安全函数', level=2)
-    doc.add_paragraph('该函数负责处理用户上传文件的文件名，移除可能的安全风险：')
-    add_code(doc, '''def safe_filename(filename):
-    """移除路径遍历字符，保留原始文件名"""
-    # 只保留文件名部分，去除目录路径
-    filename = os.path.basename(filename)
-    # 移除空字符
-    filename = filename.replace("\\x00", "")
-    if not filename:
-        filename = "unnamed"
-    return filename''')
-    doc.add_paragraph('处理逻辑说明：')
-    doc.add_paragraph('① os.path.basename() 提取纯文件名，去除所有目录路径成分', style='List Bullet')
-    doc.add_paragraph('② 替换空字符 \\x00 防止空字符截断攻击', style='List Bullet')
-    doc.add_paragraph('③ 空文件名兜底为 "unnamed"', style='List Bullet')
-
-    doc.add_paragraph()
-    doc.add_heading('2.2 upload 路由完整代码', level=2)
-    add_code(doc, '''@app.route("/upload", methods=["GET", "POST"])
-@login_required
-def upload():
-    error = None
-    success = None
-    file_url = None
-    filename = None
-
-    if request.method == "POST":
-        # CSRF 校验
-        form_token = request.form.get("csrf_token", "")
-        if not form_token or form_token != session.get("csrf_token"):
-            error = "表单验证失败，请重试"
-            return render_template("upload.html", error=error, ...)
-
-        if "upload_file" not in request.files:
-            error = "没有选择文件"
-        else:
-            file = request.files["upload_file"]
-            if file.filename == "":
-                error = "没有选择文件"
-            else:
-                # 使用用户子目录隔离不同用户的上传文件
-                username = session.get("username", "anonymous")
-                user_upload_dir = os.path.join(UPLOAD_FOLDER, username)
-                os.makedirs(user_upload_dir, exist_ok=True)
-                # 移除路径遍历字符，保留原始文件名
-                original_name = safe_filename(file.filename)
-                save_path = os.path.join(user_upload_dir, original_name)
-                file.save(save_path)
-                file_url = url_for("static",
-                    filename=f"uploads/{username}/{original_name}")
-                filename = original_name
-                success = "文件上传成功！"
-
-    return render_template("upload.html", error=error, success=success,
-                           file_url=file_url, filename=filename)''')
-
-    doc.add_paragraph('路由处理流程：')
-    doc.add_paragraph('① GET 请求直接渲染 upload.html 上传页面', style='List Bullet')
-    doc.add_paragraph('② POST 请求先进行 CSRF Token 校验', style='List Bullet')
-    doc.add_paragraph('③ 检查是否有文件被提交，文件名是否为空', style='List Bullet')
-    doc.add_paragraph('④ 按用户名创建子目录实现用户间隔离', style='List Bullet')
-    doc.add_paragraph('⑤ 调用 safe_filename 处理文件名', style='List Bullet')
-    doc.add_paragraph('⑥ 保存文件并生成访问 URL', style='List Bullet')
-
-    doc.add_page_break()
-
-    # ══════════════════════════════════════
-    # 三、漏洞发现与修复
-    # ══════════════════════════════════════
-    doc.add_heading('三、漏洞发现与修复', level=1)
-
-    # ── UF-01 路径遍历 ──
-    doc.add_heading('UF-01：文件上传路径遍历漏洞（高危）', level=2)
-
-    doc.add_heading('3.1 漏洞发现', level=3)
+    doc.add_heading('1.1 漏洞发现', level=3)
     doc.add_paragraph(
-        '审查 upload 函数的 POST 处理逻辑时，发现 file.filename 直接被拼接到文件保存路径中。'
-        'Python 的 os.path.join 在处理绝对路径参数时会丢弃之前的路径部分，'
-        '且 "../" 序列可以穿越目录。'
-        '攻击者可以构造恶意文件名将文件写入项目目录之外的任意位置。'
+        '审查 /login 路由时，发现 login.html 模板中已经正确包含了 csrf_token 隐藏字段，'
+        '但服务端的 login() 函数在接收 POST 请求后，直接处理用户名和密码，'
+        '完全没有校验表单提交的 csrf_token 与 session 中的是否一致。'
+        '这意味着虽然前端带了 Token，但后端完全无视了它。'
     )
 
-    doc.add_heading('3.2 漏洞代码（修复前）', level=3)
-    add_code(doc, '''# ❌ 修复前：直接拼接用户提供的文件名
-save_path = os.path.join(UPLOAD_FOLDER, file.filename)
-file.save(save_path)
+    doc.add_heading('1.2 漏洞代码定位', level=3)
+    add_code(doc, '''# login.html（第12行）— 表单已携带 Token：
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-# 攻击者可提交 filename="../../../etc/cronjob.sh"
-# os.path.join 解析后 → 项目根目录/../etc/cronjob.sh → /etc/cronjob.sh''')
+# app.py login() 函数（修复前第231-255行）— 但服务端未校验：
+if request.method == "POST":
+    if not check_login_rate_limit():
+        ...
+    # ❌ 缺少 CSRF 校验
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    ...''')
 
-    doc.add_heading('3.3 攻击路径推演', level=3)
+    doc.add_heading('1.3 攻击路径推演', level=3)
     add_table(doc,
         ['步骤', '操作', '说明'],
         [
-            ['1', '攻击者登录系统', '任何注册用户均可执行'],
-            ['2', '构造恶意文件名', '例如 "../../etc/cronjob.sh"'],
-            ['3', '上传文件', 'POST /upload，multipart/form-data'],
-            ['4', '文件写入任意目录', 'os.path.join 解析静态路径 + ../ 穿越到系统目录'],
-            ['5', '进阶攻击', '覆盖系统定时任务或启动脚本，实现远程代码执行'],
+            ['1', '攻击者创建恶意页面', '页面包含自动提交的登录表单'],
+            ['2', '诱导受害者访问', '通过钓鱼邮件或链接'],
+            ['3', '受害者浏览器自动POST', '携带受害者的 session Cookie'],
+            ['4', '使用攻击者账号登录', '受害者被登录到攻击者账号'],
+            ['5', '攻击者监控操作记录', '受害者的所有操作被攻击者掌握'],
         ],
-        col_widths=[1.2, 3.5, 10]
+        col_widths=[1, 4.5, 8.5]
     )
 
-    doc.add_heading('3.4 修复方案', level=3)
-    doc.add_paragraph('新增 safe_filename 函数，使用 os.path.basename() 提取纯文件名部分，'
-                       '从源头阻断目录穿越：')
-    add_code(doc, '''def safe_filename(filename):
-    """移除路径遍历字符，保留原始文件名"""
-    filename = os.path.basename(filename)  # 只保留文件名
-    filename = filename.replace("\\x00", "")  # 移除空字符
-    if not filename:
-        filename = "unnamed"
-    return filename
+    doc.add_heading('1.4 修复方案', level=3)
+    add_code(doc, '''# ✅ 修复后：增加 CSRF 校验
+if request.method == "POST":
+    if not check_login_rate_limit():
+        ...
+    # CSRF 校验
+    form_token = request.form.get("csrf_token", "")
+    if not form_token or form_token != session.get("csrf_token"):
+        error = "表单验证失败，请重试"
+        return render_template("login.html", error=error, msg=msg)
 
-# 修复后在 upload 函数中使用
-original_name = safe_filename(file.filename)
-save_path = os.path.join(user_upload_dir, original_name)
-file.save(save_path)''')
+    username = request.form.get("username", "").strip()
+    ...''')
 
     doc.add_paragraph()
-    # ── UF-02 用户隔离 ──
-    doc.add_heading('UF-02：跨用户文件覆盖漏洞（低危）', level=2)
 
-    doc.add_heading('3.5 漏洞发现', level=3)
+    # ── CSRF-02 ──
+    doc.add_heading('CSRF-02：充值接口缺少 CSRF 校验（高危）', level=2)
+
+    doc.add_heading('2.1 漏洞发现', level=3)
     doc.add_paragraph(
-        '审查存储路径时，发现所有用户的上传文件都存放在 static/uploads/ 的同一层级下，'
-        '没有按用户隔离。用户 A 上传 photo.png 后，用户 B 再上传同名的 photo.png 时，'
-        '会静默覆盖用户 A 的文件。'
+        '审查 /recharge 路由时，发现与 /login 相同的漏洞——profile.html 模板已经正确携带了 csrf_token，'
+        '但服务端的 recharge() 函数完全没有校验 Token。'
+        '结合充值接口已有的两个漏洞（越权充值 + 负金额扣款），CSRF 的缺失使攻击者可以'
+        '构造一个跨站页面，在受害者不知情的情况下对其账户进行任意金额的充值或扣款。'
     )
 
-    doc.add_heading('3.6 漏洞代码（修复前）', level=3)
-    add_code(doc, '''# ❌ 修复前：所有用户共用同一目录
-save_path = os.path.join(UPLOAD_FOLDER, file.filename)
-file_url = url_for("static", filename=f"uploads/{file.filename}")
+    doc.add_heading('2.2 漏洞代码定位', level=3)
+    add_code(doc, '''# profile.html（第22-30行）— 充值表单已携带 Token：
+<form action="/recharge" method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="user_id" value="{{ user.id }}">
+    ...
+</form>
 
-# 用户 A 上传 photo.png → static/uploads/photo.png
-# 用户 B 上传 photo.png → static/uploads/photo.png (覆盖 A 的文件)''')
+# app.py recharge() 函数（修复前第459-485行）— 但服务端未校验：
+@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    # ❌ 缺少 CSRF 校验
+    if not check_recharge_rate_limit():
+        ...
+    user_id = request.form.get("user_id", "")
+    amount = request.form.get("amount", "0")
+    ...''')
 
-    doc.add_heading('3.7 修复方案', level=3)
-    doc.add_paragraph('按用户名创建子目录，实现用户间文件隔离：')
-    add_code(doc, '''# ✅ 修复后：按用户隔离
-username = session.get("username", "anonymous")
-user_upload_dir = os.path.join(UPLOAD_FOLDER, username)
-os.makedirs(user_upload_dir, exist_ok=True)
+    doc.add_heading('2.3 攻击路径推演', level=3)
+    add_table(doc,
+        ['步骤', '操作', '说明'],
+        [
+            ['1', '攻击者构造恶意HTML页面', '页面包含自动提交的充值表单'],
+            ['2', '表单数据', 'user_id=受害者的ID&amount=-99999&csrf_token=空'],
+            ['3', '诱导受害者访问', '受害者已登录目标系统'],
+            ['4', '浏览器自动提交POST', '携带受害者的 session Cookie'],
+            ['5', '余额被扣减', 'CSRF + 越权 + 负金额三重漏洞叠加利用'],
+        ],
+        col_widths=[1, 5, 8]
+    )
 
-original_name = safe_filename(file.filename)
-save_path = os.path.join(user_upload_dir, original_name)
-file.save(save_path)
-file_url = url_for("static", filename=f"uploads/{username}/{original_name}")
+    doc.add_heading('2.4 修复方案', level=3)
+    add_code(doc, '''# ✅ 修复后：增加 CSRF 校验
+@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    # CSRF 校验
+    form_token = request.form.get("csrf_token", "")
+    if not form_token or form_token != session.get("csrf_token"):
+        return redirect("/profile?user_id=1")
 
-# 用户 A 上传 photo.png → static/uploads/admin/photo.png
-# 用户 B 上传 photo.png → static/uploads/alice/photo.png ✅''')
+    if not check_recharge_rate_limit():
+        return redirect("/profile?user_id=1")
 
+    user_id = request.form.get("user_id", "")
+    amount = request.form.get("amount", "0")
+    ...''')
 
     doc.add_paragraph()
-    # ── UF-03 CSRF ──
-    doc.add_heading('UF-03：CSRF 跨站请求伪造防护（高危）', level=2)
 
-    doc.add_heading('3.8 防护确认', level=3)
+    # ── CSRF-03 ──
+    doc.add_heading('CSRF-03：修改密码接口无 CSRF（按需求设计）', level=2)
     doc.add_paragraph(
-        '审查 upload 函数时，确认其已包含 CSRF Token 校验。'
-        'CSRF 攻击的核心是攻击者伪造请求以受害者身份执行操作。'
-        '对于上传功能，如果没有 CSRF 保护，攻击者可以构造一个自动提交表单的页面，'
-        '诱使受害者访问后自动上传恶意文件。'
-    )
-    doc.add_paragraph('经审查，CSRF 防护已正确实现，无需修复：')
-    add_code(doc, '''# 模板 upload.html 中包含 CSRF Token：
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-# app.py upload 函数中进行校验：
-form_token = request.form.get("csrf_token", "")
-if not form_token or form_token != session.get("csrf_token"):
-    error = "表单验证失败，请重试"
-    return render_template("upload.html", error=error, ...)''')
-
-    doc.add_page_break()
-
-    # ══════════════════════════════════════
-    # 四、修复验证测试
-    # ══════════════════════════════════════
-    doc.add_heading('四、修复验证测试', level=1)
-
-    doc.add_heading('4.1 路径遍历防护测试', level=2)
-    add_table(doc,
-        ['测试用例', '输入文件名', '处理后文件名', '保存路径', '结果'],
-        [
-            ['正常文件', 'avatar.png', 'avatar.png', 'static/uploads/admin/avatar.png', '✅ 正常'],
-            ['相对路径', '../../etc/passwd', 'passwd', 'static/uploads/admin/passwd', '✅ 安全'],
-            ['绝对路径', '/etc/cron.d/evil', 'evil', 'static/uploads/admin/evil', '✅ 安全'],
-            ['多层穿越', '../../../../a.txt', 'a.txt', 'static/uploads/admin/a.txt', '✅ 安全'],
-            ['空字符绕过', 'malware.exe\\x00.jpg', 'malware.exe.jpg', 'static/uploads/admin/malware.exe.jpg', '✅ 安全'],
-            ['空文件名', '', 'unnamed', 'static/uploads/admin/unnamed', '✅ 兜底'],
-        ],
-        col_widths=[2.5, 3.5, 3.5, 4.5, 2]
-    )
-
-    doc.add_paragraph()
-    doc.add_heading('4.2 用户隔离测试', level=2)
-    add_table(doc,
-        ['场景', '操作', '预期', '结果'],
-        [
-            ['admin 上传 photo.png', 'POST /upload → photo.png', 'admin 目录保存', '✅ 通过'],
-            ['alice 上传同名 photo.png', 'POST /upload → photo.png', 'alice 目录保存', '✅ 通过'],
-            ['admin 的文件是否被覆盖', '检查 admin 目录文件', 'admin/photo.png 仍在', '✅ 未覆盖'],
-        ],
-        col_widths=[4, 4.5, 4, 2]
-    )
-
-    doc.add_paragraph()
-    doc.add_heading('4.3 安全校验测试', level=2)
-    add_table(doc,
-        ['测试项', '操作', '预期', '结果'],
-        [
-            ['未登录访问上传页', 'GET /upload', '302 跳转 /login', '✅ 通过'],
-            ['无 CSRF Token 上传', 'POST /upload (无 csrf_token)', '提示"表单验证失败"', '✅ 通过'],
-            ['CSRF Token 错误', 'POST /upload (错误 token)', '提示"表单验证失败"', '✅ 通过'],
-            ['不选文件直接提交', 'POST /upload (无文件)', '提示"没有选择文件"', '✅ 通过'],
-            ['空文件名提交', 'POST /upload (文件名空)', '提示"没有选择文件"', '✅ 通过'],
-            ['文件超过 16MB', '上传 >16MB 文件', 'Flask 413 错误', '✅ 通过'],
-        ],
-        col_widths=[4, 4.5, 4.5, 2]
-    )
-
-    doc.add_paragraph()
-    doc.add_heading('4.4 功能完整性测试', level=2)
-    add_table(doc,
-        ['测试项', '操作', '预期', '结果'],
-        [
-            ['正常上传图片', '选择图片文件 → 点击上传', '显示预览和链接', '✅ 通过'],
-            ['上传后文件可访问', '点击返回的 URL', '图片正常显示', '✅ 通过'],
-            ['上传页返回首页', '点击"返回首页"', '跳转到首页', '✅ 通过'],
-        ],
-        col_widths=[4, 5, 4.5, 2]
+        'POST /change-password 路由没有 CSRF Token。这是按照需求要求'
+        '（"不要添加 CSRF Token"）特意保留的。任何已登录用户可修改任何人的密码，'
+        '无需 CSRF 校验。此项不修复。'
     )
 
     doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 五、安全防护总览
+    # 四、修复验证
     # ══════════════════════════════════════
-    doc.add_heading('五、安全防护总览', level=1)
+    doc.add_heading('四、修复验证', level=1)
 
     add_table(doc,
-        ['攻击类型', '防护层', '防护机制', '状态'],
+        ['测试项', '操作', '预期', '结果'],
         [
-            ['未授权上传', '路由层', '@login_required 装饰器', '✅ 已防护'],
-            ['CSRF 跨站上传', '校验层', 'CSRF Token 匹配验证', '✅ 已防护'],
-            ['路径遍历', '文件名层', 'safe_filename() + basename', '✅ 已修复'],
-            ['文件覆盖（跨用户）', '目录层', '按用户名建子目录', '✅ 已修复'],
-            ['文件过大', '配置层', 'MAX_CONTENT_LENGTH = 16MB', '✅ 已防护'],
-            ['文件类型绕过', '需求设计', '不检查后缀和 MIME', '📋 设计如此'],
+            ['登录 — 无CSRF Token', 'POST /login 无csrf_token', '提示"表单验证失败"', '✅ 通过'],
+            ['登录 — CSRF Token错误', 'POST /login csrf_token=错误值', '提示"表单验证失败"', '✅ 通过'],
+            ['登录 — CSRF Token正确', 'POST /login csrf_token=正确值', '登录成功', '✅ 通过'],
+            ['充值 — 无CSRF Token', 'POST /recharge 无csrf_token', '302跳转首页', '✅ 通过'],
+            ['充值 — CSRF Token错误', 'POST /recharge csrf_token=错误值', '302跳转首页', '✅ 通过'],
+            ['充值 — CSRF Token正确', 'POST /recharge csrf_token=正确值', '302跳转个人中心', '✅ 通过'],
+            ['注册 — CSRF未受影响', 'POST /register', '正常注册', '✅ 通过'],
+            ['上传 — CSRF未受影响', 'POST /upload', '正常上传', '✅ 通过'],
+            ['修改密码 — 按设计无CSRF', 'POST /change-password', '正常修改', '✅ 通过'],
         ],
-        col_widths=[3.5, 2.5, 5.5, 2.5]
+        col_widths=[4, 5, 4, 2]
     )
 
     doc.add_paragraph()
 
     # ══════════════════════════════════════
-    # 六、Git 提交记录
+    # 五、CSRF 防护全景
     # ══════════════════════════════════════
-    doc.add_heading('六、Git 提交记录', level=1)
+    doc.add_heading('五、CSRF 防护全景', level=1)
+
+    add_table(doc,
+        ['POST 路由', '表单 Token', '服务端校验', '防护状态'],
+        [
+            ['POST /login', '✅ 隐藏字段', '✅ 已修复', '✅ 已防护'],
+            ['POST /register', '✅ 隐藏字段', '✅ 已有', '✅ 已防护'],
+            ['POST /upload', '✅ 隐藏字段', '✅ 已有', '✅ 已防护'],
+            ['POST /recharge', '✅ 隐藏字段', '✅ 已修复', '✅ 已防护'],
+            ['POST /change-password', '❌ 无', '❌ 无', '📋 按需求设计'],
+        ],
+        col_widths=[4, 3, 3, 3]
+    )
+
+    doc.add_paragraph()
+    doc.add_paragraph('CSRF Token 机制的核心流程：')
+    add_code(doc, '''用户浏览器                     Flask 服务端
+    |                              |
+    |--- GET /任意页面 ------------>|
+    |                              |--- session["csrf_token"] = abc123
+    |<-- 页面 + csrf_token=abc123 -|
+    |                              |
+    |--- POST /表单 + csrf_token=abc123 ->|
+    |                              |--- form_token == session["csrf_token"]?
+    |                              |    ├── 一致 → 执行操作
+    |                              |    └── 不一致 → 拒绝请求
+    |<-- 结果 ---------------------|''')
+
+    doc.add_paragraph()
+
+    # ══════════════════════════════════════
+    # 六、漏洞汇总
+    # ══════════════════════════════════════
+    doc.add_heading('六、漏洞汇总', level=1)
+
+    add_table(doc,
+        ['编号', '漏洞名称', '严重', '状态'],
+        [
+            ['CSRF-01', '登录接口缺少 CSRF 校验', '🔴 高危', '✅ 已修复'],
+            ['CSRF-02', '充值接口缺少 CSRF 校验', '🔴 高危', '✅ 已修复'],
+            ['CSRF-03', '修改密码接口无 CSRF', '📋 按设计', '⏭️ 不修复'],
+        ],
+        col_widths=[2, 5, 2.5, 3]
+    )
+
+    doc.add_paragraph()
+
+    # ══════════════════════════════════════
+    # 七、Git 提交记录
+    # ══════════════════════════════════════
+    doc.add_heading('七、Git 提交记录', level=1)
 
     add_table(doc,
         ['提交哈希', '提交信息', '涉及文件'],
         [
-            ['73095a5', 'feat: 新增用户头像上传功能', 'app.py, upload.html, base.html, index.html'],
-            ['18a36f4', 'fix: 修复8项安全漏洞（含UF-01, UF-02）', 'app.py'],
-            ['352b3b6', 'fix: 修复4项安全漏洞（VS-01~04）', 'app.py'],
+            ['11c2643', 'fix: 修复CSRF漏洞（登录、充值接口）', 'app.py'],
         ],
-        col_widths=[3, 6, 6]
+        col_widths=[3, 7, 4]
     )
 
     doc.add_paragraph()
@@ -419,7 +404,7 @@ if not form_token or form_token != session.get("csrf_token"):
 
     # ── 保存 ──
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_path = os.path.join(script_dir, 'static', '文件上传漏洞修复与测试报告.docx')
+    output_path = os.path.join(script_dir, 'static', 'CSRF漏洞报告.docx')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     doc.save(output_path)
     print(f'报告已生成：{output_path}')
