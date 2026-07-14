@@ -485,6 +485,28 @@ def recharge():
     return redirect(f"/profile?user_id={user_id}")
 
 
+# ── 修改密码（需要登录）──
+@app.route("/change-password", methods=["POST"])
+@login_required
+def change_password():
+    username = request.form.get("username", "")
+    new_password = request.form.get("new_password", "")
+
+    if username and new_password:
+        password_hash = generate_password_hash(new_password)
+        conn = None
+        try:
+            conn = sqlite3.connect("data/users.db")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET password = ? WHERE username = ?", (password_hash, username))
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    return redirect("/profile")
+
+
 # ── 动态页面加载 ──
 @app.route("/page")
 def dynamic_page():
