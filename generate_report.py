@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成CSRF漏洞报告"""
+"""生成SSRF漏洞测试与修复报告"""
 
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
@@ -71,7 +71,7 @@ def create_report():
 
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run('CSRF 漏洞报告')
+    run = subtitle.add_run('SSRF 漏洞测试与修复报告')
     run.bold = True; run.font.size = Pt(20)
     run.font.color.rgb = RGBColor(0x66, 0x7e, 0xea)
 
@@ -87,304 +87,275 @@ def create_report():
     run = info.add_run(
         '项目地址：github.com/nobody848/flask-user-management\n'
         '报告日期：2026-07-13\n'
-        '审计范围：全部 POST 路由的 CSRF 防护\n'
-        '提交哈希：11c2643'
+        '测试范围：/fetch-url 路由 SSRF 漏洞检测与修复\n'
+        '提交哈希：b504f9e'
     )
     run.font.size = Pt(12)
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
     doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 一、CSRF 攻击原理
+    # 一、SSRF 漏洞原理
     # ══════════════════════════════════════
-    doc.add_heading('一、CSRF 攻击原理', level=1)
+    doc.add_heading('一、SSRF 漏洞原理', level=1)
 
     doc.add_paragraph(
-        'CSRF（Cross-Site Request Forgery，跨站请求伪造）是一种 Web 安全攻击，'
-        '攻击者诱导已登录用户访问恶意页面，该页面自动向目标网站发送伪造请求，'
-        '利用用户的登录状态执行未授权操作。'
+        'SSRF（Server-Side Request Forgery，服务器端请求伪造）是一种 Web 安全漏洞，'
+        '攻击者可以诱使服务器向攻击者指定的任意 URL 发起请求。由于请求是从服务器内部发出的，'
+        '攻击者可以利用此漏洞访问内网服务、读取本地文件或进行端口扫描。'
     )
 
-    doc.add_paragraph('CSRF 攻击的四个必要条件：')
+    doc.add_paragraph('SSRF 攻击的常见危害：')
     conds = [
-        '目标网站仅靠 Cookie 识别用户身份',
-        '目标网站的 POST 请求没有额外的验证令牌',
-        '用户当前在目标网站处于登录状态',
-        '攻击者可以构造并发送完整的跨站请求',
+        '内网服务探测：扫描内网 IP 和端口，发现未授权的内部服务',
+        '云元数据窃取：访问云厂商元数据接口（如 169.254.169.254）获取临时凭证',
+        '本地文件读取：使用 file:// 协议读取服务器上的敏感文件',
+        '内网攻击：利用 SSRF 攻击内网的 Redis、Memcached 等未授权服务',
     ]
     for c in conds:
         doc.add_paragraph(c, style='List Bullet')
 
-    doc.add_paragraph('攻击流程图：')
-    add_code(doc, '''攻击者网站                   用户浏览器                  目标网站
-    |                           |                          |
-    |--- 1. 诱导用户访问 ------->|                          |
-    |                           |--- 2. 自动发送 POST ----->|
-    |                           |    (携带用户 Cookie)      |
-    |                           |                          |--- 3. 无 CSRF Token
-    |                           |                          |    校验 → 执行操作
-    |                           |<-- 4. 操作成功 ----------|
-    |                           |    (用户不知情)           |''')
+    doc.add_paragraph('本次测试针对的路由：')
+    add_code(doc, '''POST /fetch-url
+需要登录
+接收 url 参数
+使用 urllib.request.urlopen() 直接访问''')
 
     doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 二、CSRF 防护现状
+    # 二、漏洞发现
     # ══════════════════════════════════════
-    doc.add_heading('二、项目 CSRF 防护现状', level=1)
+    doc.add_heading('二、漏洞发现', level=1)
 
-    doc.add_paragraph('本项目使用自定义 CSRF Token 机制：')
-    doc.add_paragraph('① 用户在访问任意页面时，由 before_request 钩子自动生成 64 位随机十六进制 Token 存入 session', style='List Bullet')
-    doc.add_paragraph('② 通过 context_processor 将 Token 注入到所有模板的 {{ csrf_token }} 变量中', style='List Bullet')
-    doc.add_paragraph('③ 表单通过隐藏字段 <input name="csrf_token" value="{{ csrf_token }}"> 提交 Token', style='List Bullet')
-    doc.add_paragraph('④ 服务端接收请求后比对 form_token 与 session 中的 csrf_token 是否一致', style='List Bullet')
+    doc.add_heading('2.1 漏洞代码定位', level=2)
+    doc.add_paragraph('审查 /fetch-url 路由时发现以下问题：')
 
-    add_code(doc, '''# CSRF Token 生成（app.py 第 270-282 行）
-@app.before_request
-def generate_csrf_token():
-    if "csrf_token" not in session:
-        session["csrf_token"] = secrets.token_hex(32)
+    doc.add_heading('SSRF-01：未限制 URL 协议（高危）', level=3)
+    doc.add_paragraph(
+        'urlopen() 直接接收用户输入的 URL，未对协议做任何限制。'
+        '攻击者可以使用 file://、gopher://、dict:// 等非 HTTP 协议绕过正常访问限制。'
+    )
+    add_code(doc, '''# ❌ 修复前：协议完全开放
+req = urllib.request.Request(url)
+with urllib.request.urlopen(req, timeout=10) as response:
+    ...
 
-def get_csrf_token():
-    return session.get("csrf_token", "")
+# 攻击者可传入：
+#   file:///etc/passwd      → 读取本地文件
+#   gopher://localhost:6379 → Redis 攻击
+#   dict://localhost:11211  → Memcached 攻击''')
 
-@app.context_processor
-def inject_csrf_token():
-    return dict(csrf_token=get_csrf_token())''')
+    doc.add_heading('SSRF-02：未屏蔽内网地址（高危）', level=3)
+    doc.add_paragraph(
+        'urlopen() 可以访问内网 IP 地址，攻击者可以利用此功能探测内网服务、'
+        '访问云元数据接口获取云服务临时凭证。'
+    )
+    add_code(doc, '''# ❌ 修复前：可访问任意地址
+# 攻击者可传入：
+#   http://127.0.0.1:5000/           → 自身服务
+#   http://169.254.169.254/          → AWS/GCP/Azure 云元数据
+#   http://10.0.0.1:6379/            → 内网 Redis
+#   http://192.168.1.1:8080/         → 内网其他服务''')
 
     doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 三、漏洞发现过程
+    # 三、攻击路径推演
     # ══════════════════════════════════════
-    doc.add_heading('三、漏洞发现过程', level=1)
+    doc.add_heading('三、攻击路径推演', level=1)
 
-    doc.add_paragraph(
-        '对项目中所有 POST 路由逐一审查，检查每个路由是否在服务端验证了 csrf_token。'
-        '共审查 5 个 POST 路由：'
-    )
-
-    add_table(doc,
-        ['路由', '表单 Token', '服务端校验', '结论'],
-        [
-            ['POST /login', '✅ 已携带', '❌ 未校验', 'CSRF-01'],
-            ['POST /register', '✅ 已携带', '✅ 已校验', '安全'],
-            ['POST /upload', '✅ 已携带', '✅ 已校验', '安全'],
-            ['POST /recharge', '✅ 已携带', '❌ 未校验', 'CSRF-02'],
-            ['POST /change-password', '❌ 无（需求决定）', '❌ 无（需求决定）', '按设计'],
-        ],
-        col_widths=[4, 3, 3, 3.5]
-    )
-
-    doc.add_paragraph()
-
-    # ── CSRF-01 ──
-    doc.add_heading('CSRF-01：登录接口缺少 CSRF 校验（高危）', level=2)
-
-    doc.add_heading('1.1 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 /login 路由时，发现 login.html 模板中已经正确包含了 csrf_token 隐藏字段，'
-        '但服务端的 login() 函数在接收 POST 请求后，直接处理用户名和密码，'
-        '完全没有校验表单提交的 csrf_token 与 session 中的是否一致。'
-        '这意味着虽然前端带了 Token，但后端完全无视了它。'
-    )
-
-    doc.add_heading('1.2 漏洞代码定位', level=3)
-    add_code(doc, '''# login.html（第12行）— 表单已携带 Token：
-<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-# app.py login() 函数（修复前第231-255行）— 但服务端未校验：
-if request.method == "POST":
-    if not check_login_rate_limit():
-        ...
-    # ❌ 缺少 CSRF 校验
-    username = request.form.get("username", "").strip()
-    password = request.form.get("password", "")
-    ...''')
-
-    doc.add_heading('1.3 攻击路径推演', level=3)
+    doc.add_heading('3.1 云元数据窃取攻击', level=2)
     add_table(doc,
         ['步骤', '操作', '说明'],
         [
-            ['1', '攻击者创建恶意页面', '页面包含自动提交的登录表单'],
-            ['2', '诱导受害者访问', '通过钓鱼邮件或链接'],
-            ['3', '受害者浏览器自动POST', '携带受害者的 session Cookie'],
-            ['4', '使用攻击者账号登录', '受害者被登录到攻击者账号'],
-            ['5', '攻击者监控操作记录', '受害者的所有操作被攻击者掌握'],
+            ['1', '攻击者登录系统', '获取合法 session'],
+            ['2', '构造恶意 URL', 'http://169.254.169.254/latest/meta-data/'],
+            ['3', '提交 POST /fetch-url', '服务器从内部请求云元数据接口'],
+            ['4', '获取临时凭证', '返回结果中包含云服务访问密钥'],
+            ['5', '利用凭证', '使用密钥访问云资源，造成数据泄露'],
         ],
         col_widths=[1, 4.5, 8.5]
     )
 
-    doc.add_heading('1.4 修复方案', level=3)
-    add_code(doc, '''# ✅ 修复后：增加 CSRF 校验
-if request.method == "POST":
-    if not check_login_rate_limit():
-        ...
-    # CSRF 校验
-    form_token = request.form.get("csrf_token", "")
-    if not form_token or form_token != session.get("csrf_token"):
-        error = "表单验证失败，请重试"
-        return render_template("login.html", error=error, msg=msg)
-
-    username = request.form.get("username", "").strip()
-    ...''')
-
-    doc.add_paragraph()
-
-    # ── CSRF-02 ──
-    doc.add_heading('CSRF-02：充值接口缺少 CSRF 校验（高危）', level=2)
-
-    doc.add_heading('2.1 漏洞发现', level=3)
-    doc.add_paragraph(
-        '审查 /recharge 路由时，发现与 /login 相同的漏洞——profile.html 模板已经正确携带了 csrf_token，'
-        '但服务端的 recharge() 函数完全没有校验 Token。'
-        '结合充值接口已有的两个漏洞（越权充值 + 负金额扣款），CSRF 的缺失使攻击者可以'
-        '构造一个跨站页面，在受害者不知情的情况下对其账户进行任意金额的充值或扣款。'
-    )
-
-    doc.add_heading('2.2 漏洞代码定位', level=3)
-    add_code(doc, '''# profile.html（第22-30行）— 充值表单已携带 Token：
-<form action="/recharge" method="POST">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="user_id" value="{{ user.id }}">
-    ...
-</form>
-
-# app.py recharge() 函数（修复前第459-485行）— 但服务端未校验：
-@app.route("/recharge", methods=["POST"])
-@login_required
-def recharge():
-    # ❌ 缺少 CSRF 校验
-    if not check_recharge_rate_limit():
-        ...
-    user_id = request.form.get("user_id", "")
-    amount = request.form.get("amount", "0")
-    ...''')
-
-    doc.add_heading('2.3 攻击路径推演', level=3)
+    doc.add_heading('3.2 内网 Redis 攻击', level=2)
     add_table(doc,
         ['步骤', '操作', '说明'],
         [
-            ['1', '攻击者构造恶意HTML页面', '页面包含自动提交的充值表单'],
-            ['2', '表单数据', 'user_id=受害者的ID&amount=-99999&csrf_token=空'],
-            ['3', '诱导受害者访问', '受害者已登录目标系统'],
-            ['4', '浏览器自动提交POST', '携带受害者的 session Cookie'],
-            ['5', '余额被扣减', 'CSRF + 越权 + 负金额三重漏洞叠加利用'],
+            ['1', '攻击者登录系统', '获取合法 session'],
+            ['2', '探测内网 Redis', 'http://10.0.0.2:6379/'],
+            ['3', '使用 gopher://', 'gopher://10.0.0.2:6379/_*1$8...'],
+            ['4', '写入 SSH 密钥', '通过 Redis 未授权访问写入 SSH 公钥'],
+            ['5', '远程登录服务器', '直接获得服务器 shell 权限'],
         ],
-        col_widths=[1, 5, 8]
+        col_widths=[1, 4.5, 8.5]
     )
 
-    doc.add_heading('2.4 修复方案', level=3)
-    add_code(doc, '''# ✅ 修复后：增加 CSRF 校验
-@app.route("/recharge", methods=["POST"])
-@login_required
-def recharge():
-    # CSRF 校验
-    form_token = request.form.get("csrf_token", "")
-    if not form_token or form_token != session.get("csrf_token"):
-        return redirect("/profile?user_id=1")
-
-    if not check_recharge_rate_limit():
-        return redirect("/profile?user_id=1")
-
-    user_id = request.form.get("user_id", "")
-    amount = request.form.get("amount", "0")
-    ...''')
-
-    doc.add_paragraph()
-
-    # ── CSRF-03 ──
-    doc.add_heading('CSRF-03：修改密码接口无 CSRF（按需求设计）', level=2)
-    doc.add_paragraph(
-        'POST /change-password 路由没有 CSRF Token。这是按照需求要求'
-        '（"不要添加 CSRF Token"）特意保留的。任何已登录用户可修改任何人的密码，'
-        '无需 CSRF 校验。此项不修复。'
+    doc.add_heading('3.3 本地文件读取攻击', level=2)
+    add_table(doc,
+        ['步骤', '操作', '说明'],
+        [
+            ['1', '攻击者登录系统', '获取合法 session'],
+            ['2', '构造恶意 URL', 'file:///etc/passwd'],
+            ['3', '提交 POST /fetch-url', '服务器读取本地文件'],
+            ['4', '返回文件内容', '攻击者获取系统用户列表'],
+            ['5', '进一步攻击', '读取配置文件获取数据库密码等敏感信息'],
+        ],
+        col_widths=[1, 4.5, 8.5]
     )
 
     doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 四、修复验证
+    # 四、修复方案
     # ══════════════════════════════════════
-    doc.add_heading('四、修复验证', level=1)
+    doc.add_heading('四、修复方案', level=1)
+
+    doc.add_paragraph(
+        '针对两个 SSRF 漏洞分别新增 validate_url_protocol() 和 is_internal_ip() '
+        '两个安全函数，在发起请求前对 URL 进行两次检查。'
+    )
+
+    doc.add_heading('4.1 修复 SSRF-01：协议校验', level=2)
+    add_code(doc, '''def validate_url_protocol(url):
+    """验证 URL 协议只允许 http/https"""
+    if not url.startswith("http://") and not url.startswith("https://"):
+        return False
+    if url.startswith("http://localhost") or url.startswith("https://localhost"):
+        return False
+    return True''')
+
+    doc.add_paragraph('该函数拦截以下协议：')
+    doc.add_paragraph('file:// — 本地文件读取', style='List Bullet')
+    doc.add_paragraph('gopher:// — 协议走私攻击', style='List Bullet')
+    doc.add_paragraph('dict:// — Memcached/Redis 攻击', style='List Bullet')
+    doc.add_paragraph('ftp:// — FTP 请求', style='List Bullet')
+    doc.add_paragraph('http://localhost / https://localhost — localhost 绕过', style='List Bullet')
+
+    doc.add_heading('4.2 修复 SSRF-02：内网 IP 屏蔽', level=2)
+    add_code(doc, '''def is_internal_ip(host):
+    """检查目标 IP 是否为内网地址"""
+    try:
+        ip = socket.gethostbyname(host)
+        parts = ip.split(".")
+        if parts[0] == "127":                 # 127.0.0.0/8
+            return True
+        if parts[0] == "10":                   # 10.0.0.0/8
+            return True
+        if parts[0] == "0":                    # 0.0.0.0/8
+            return True
+        if parts[0] == "169" and parts[1] == "254":  # 169.254.0.0/16
+            return True
+        if parts[0] == "192" and parts[1] == "168":  # 192.168.0.0/16
+            return True
+        if parts[0] == "172" and 16 <= int(parts[1]) <= 31:  # 172.16.0.0/12
+            return True
+        if host.lower() == "localhost":
+            return True
+        return False
+    except Exception:
+        return True''')
+
+    doc.add_paragraph('该函数屏蔽的地址段：')
+    doc.add_paragraph('127.0.0.0/8 — 回环地址（自身服务）', style='List Bullet')
+    doc.add_paragraph('10.0.0.0/8 — A 类私有地址', style='List Bullet')
+    doc.add_paragraph('172.16.0.0/12 — B 类私有地址', style='List Bullet')
+    doc.add_paragraph('192.168.0.0/16 — C 类私有地址', style='List Bullet')
+    doc.add_paragraph('169.254.0.0/16 — 链路本地地址（云元数据）', style='List Bullet')
+    doc.add_paragraph('localhost — 主机名绕过', style='List Bullet')
+
+    doc.add_heading('4.3 修复后的请求流程', level=2)
+    add_code(doc, '''用户提交 URL
+    │
+    ├── validate_url_protocol()
+    │   ├── 非 http/https → BLOCKED
+    │   ├── localhost → BLOCKED
+    │   └── 通过 → 继续
+    │
+    ├── is_internal_ip(urlparse(url).hostname)
+    │   ├── 解析 host 到 IP
+    │   ├── 内网 IP → BLOCKED
+    │   └── 外网 IP → 继续
+    │
+    └── urllib.request.urlopen()
+        └── 返回结果''')
+
+    doc.add_page_break()
+
+    # ══════════════════════════════════════
+    # 五、测试验证
+    # ══════════════════════════════════════
+    doc.add_heading('五、测试验证', level=1)
 
     add_table(doc,
-        ['测试项', '操作', '预期', '结果'],
+        ['编号', '测试用例', '输入 URL', '预期结果', '实际结果'],
         [
-            ['登录 — 无CSRF Token', 'POST /login 无csrf_token', '提示"表单验证失败"', '✅ 通过'],
-            ['登录 — CSRF Token错误', 'POST /login csrf_token=错误值', '提示"表单验证失败"', '✅ 通过'],
-            ['登录 — CSRF Token正确', 'POST /login csrf_token=正确值', '登录成功', '✅ 通过'],
-            ['充值 — 无CSRF Token', 'POST /recharge 无csrf_token', '302跳转首页', '✅ 通过'],
-            ['充值 — CSRF Token错误', 'POST /recharge csrf_token=错误值', '302跳转首页', '✅ 通过'],
-            ['充值 — CSRF Token正确', 'POST /recharge csrf_token=正确值', '302跳转个人中心', '✅ 通过'],
-            ['注册 — CSRF未受影响', 'POST /register', '正常注册', '✅ 通过'],
-            ['上传 — CSRF未受影响', 'POST /upload', '正常上传', '✅ 通过'],
-            ['修改密码 — 按设计无CSRF', 'POST /change-password', '正常修改', '✅ 通过'],
+            ['T-01', 'file:// 协议', 'file:///etc/passwd', '协议拦截', '✅ 通过'],
+            ['T-02', 'gopher:// 协议', 'gopher://internal:6379/', '协议拦截', '✅ 通过'],
+            ['T-03', 'dict:// 协议', 'dict://localhost:11211/', '协议拦截', '✅ 通过'],
+            ['T-04', '回环地址', 'http://127.0.0.1:5000/', '内网拦截', '✅ 通过'],
+            ['T-05', 'localhost', 'http://localhost:5000/', '协议拦截', '✅ 通过'],
+            ['T-06', 'A类私有', 'http://10.0.0.1/', '内网拦截', '✅ 通过'],
+            ['T-07', 'B类私有', 'http://172.16.0.1/', '内网拦截', '✅ 通过'],
+            ['T-08', 'C类私有', 'http://192.168.1.1/', '内网拦截', '✅ 通过'],
+            ['T-09', '链路本地', 'http://169.254.169.254/', '内网拦截', '✅ 通过'],
+            ['T-10', '正常外网', 'https://example.com', '正常抓取', '✅ 通过'],
+            ['T-11', '未登录访问', '—', '302 跳转', '✅ 通过'],
         ],
-        col_widths=[4, 5, 4, 2]
+        col_widths=[1.5, 3, 4.5, 2.5, 2.5]
     )
 
     doc.add_paragraph()
 
     # ══════════════════════════════════════
-    # 五、CSRF 防护全景
+    # 六、安全防护对比
     # ══════════════════════════════════════
-    doc.add_heading('五、CSRF 防护全景', level=1)
+    doc.add_heading('六、安全防护对比', level=1)
 
     add_table(doc,
-        ['POST 路由', '表单 Token', '服务端校验', '防护状态'],
+        ['攻击向量', '修复前', '修复后'],
         [
-            ['POST /login', '✅ 隐藏字段', '✅ 已修复', '✅ 已防护'],
-            ['POST /register', '✅ 隐藏字段', '✅ 已有', '✅ 已防护'],
-            ['POST /upload', '✅ 隐藏字段', '✅ 已有', '✅ 已防护'],
-            ['POST /recharge', '✅ 隐藏字段', '✅ 已修复', '✅ 已防护'],
-            ['POST /change-password', '❌ 无', '❌ 无', '📋 按需求设计'],
+            ['file:// 读取本地文件', '❌ 可读取', '✅ 协议拦截'],
+            ['gopher:// Redis 攻击', '❌ 可攻击', '✅ 协议拦截'],
+            ['dict:// Memcached 攻击', '❌ 可攻击', '✅ 协议拦截'],
+            ['127.0.0.1 自身服务', '❌ 可访问', '✅ 内网拦截'],
+            ['localhost 绕过', '❌ 可访问', '✅ 协议拦截'],
+            ['10.x.x.x 内网服务', '❌ 可扫描', '✅ 内网拦截'],
+            ['172.16-31.x.x 内网服务', '❌ 可扫描', '✅ 内网拦截'],
+            ['192.168.x.x 内网服务', '❌ 可扫描', '✅ 内网拦截'],
+            ['169.254.169.254 云元数据', '❌ 可窃取', '✅ 内网拦截'],
+            ['正常外网 URL', '✅ 可访问', '✅ 可访问'],
         ],
-        col_widths=[4, 3, 3, 3]
+        col_widths=[5.5, 2.5, 2.5]
     )
 
-    doc.add_paragraph()
-    doc.add_paragraph('CSRF Token 机制的核心流程：')
-    add_code(doc, '''用户浏览器                     Flask 服务端
-    |                              |
-    |--- GET /任意页面 ------------>|
-    |                              |--- session["csrf_token"] = abc123
-    |<-- 页面 + csrf_token=abc123 -|
-    |                              |
-    |--- POST /表单 + csrf_token=abc123 ->|
-    |                              |--- form_token == session["csrf_token"]?
-    |                              |    ├── 一致 → 执行操作
-    |                              |    └── 不一致 → 拒绝请求
-    |<-- 结果 ---------------------|''')
-
-    doc.add_paragraph()
+    doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 六、漏洞汇总
+    # 七、漏洞汇总
     # ══════════════════════════════════════
-    doc.add_heading('六、漏洞汇总', level=1)
+    doc.add_heading('七、漏洞汇总', level=1)
 
     add_table(doc,
-        ['编号', '漏洞名称', '严重', '状态'],
+        ['编号', '漏洞名称', '严重', '发现位置', '状态'],
         [
-            ['CSRF-01', '登录接口缺少 CSRF 校验', '🔴 高危', '✅ 已修复'],
-            ['CSRF-02', '充值接口缺少 CSRF 校验', '🔴 高危', '✅ 已修复'],
-            ['CSRF-03', '修改密码接口无 CSRF', '📋 按设计', '⏭️ 不修复'],
+            ['SSRF-01', 'URL 协议未限制', '🔴 高危', '/fetch-url 第534行', '✅ 已修复'],
+            ['SSRF-02', '内网地址未屏蔽', '🔴 高危', '/fetch-url 第535行', '✅ 已修复'],
         ],
-        col_widths=[2, 5, 2.5, 3]
+        col_widths=[2, 4, 2, 3.5, 3]
     )
 
     doc.add_paragraph()
 
     # ══════════════════════════════════════
-    # 七、Git 提交记录
+    # 八、Git 提交记录
     # ══════════════════════════════════════
-    doc.add_heading('七、Git 提交记录', level=1)
+    doc.add_heading('八、Git 提交记录', level=1)
 
     add_table(doc,
         ['提交哈希', '提交信息', '涉及文件'],
         [
-            ['11c2643', 'fix: 修复CSRF漏洞（登录、充值接口）', 'app.py'],
+            ['b504f9e', 'fix: 修复SSRF漏洞（URL抓取功能）', 'app.py'],
         ],
         col_widths=[3, 7, 4]
     )
@@ -404,7 +375,7 @@ def recharge():
 
     # ── 保存 ──
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_path = os.path.join(script_dir, 'static', 'CSRF漏洞报告.docx')
+    output_path = os.path.join(script_dir, 'static', 'SSRF漏洞测试与修复报告.docx')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     doc.save(output_path)
     print(f'报告已生成：{output_path}')
