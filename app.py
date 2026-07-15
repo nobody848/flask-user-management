@@ -5,6 +5,7 @@ import secrets
 import time
 import urllib.request
 import urllib.error
+import socket
 from functools import wraps
 from flask import Flask, render_template, request, redirect, session, abort, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -521,6 +522,39 @@ def change_password():
 
 
 # ── URL 抓取（需要登录）──
+def is_internal_ip(host):
+    """检查目标 IP 是否为内网地址"""
+    try:
+        ip = socket.gethostbyname(host)
+        parts = ip.split(".")
+        if parts[0] == "127":
+            return True
+        if parts[0] == "10":
+            return True
+        if parts[0] == "0":
+            return True
+        if parts[0] == "169" and parts[1] == "254":
+            return True
+        if parts[0] == "192" and parts[1] == "168":
+            return True
+        if parts[0] == "172" and 16 <= int(parts[1]) <= 31:
+            return True
+        if host.lower() == "localhost":
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def validate_url_protocol(url):
+    """验证 URL 协议只允许 http/https"""
+    if not url.startswith("http://") and not url.startswith("https://"):
+        return False
+    if url.startswith("http://localhost") or url.startswith("https://localhost"):
+        return False
+    return True
+
+
 @app.route("/fetch-url", methods=["POST"])
 @login_required
 def fetch_url():
@@ -530,8 +564,32 @@ def fetch_url():
     user_info = get_safe_user_info(username)
 
     if url:
+        # SSRF 防护：检查协议
+        if not validate_url_protocol(url):
+            fetch_result = {
+                "url": url,
+                "status_code": "BLOCKED",
+                "content": "不允许的协议，仅支持 http:// 和 https://"
+            }
+            return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None, fetch_result=fetch_result, fetch_url=url)
+
+        # SSRF 防护：提取 host 并检查是否为内网地址
         try:
-            req = urllib.request.Request(url)
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname
+            if host and is_internal_ip(host):
+                fetch_result = {
+                    "url": url,
+                    "status_code": "BLOCKED",
+                    "content": "不允许访问内网地址"
+                }
+                return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None, fetch_result=fetch_result, fetch_url=url)
+        except Exception:
+            pass
+
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=10) as response:
                 status_code = response.status
                 content = response.read().decode("utf-8", errors="replace")
