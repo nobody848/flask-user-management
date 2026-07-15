@@ -3,6 +3,8 @@ import re
 import sqlite3
 import secrets
 import time
+import urllib.request
+import urllib.error
 from functools import wraps
 from flask import Flask, render_template, request, redirect, session, abort, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -219,7 +221,7 @@ def validate_phone(phone):
 def index():
     username = session.get("username")
     user_info = get_safe_user_info(username)
-    return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None)
+    return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None, fetch_result=None, fetch_url="")
 
 
 # ── 登录 ──
@@ -256,7 +258,7 @@ def login():
                 session["csrf_token"] = secrets.token_hex(32)
                 reset_login_rate_limit()
                 user_info = get_safe_user_info(username)
-                return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None)
+                return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None, fetch_result=None, fetch_url="")
             else:
                 error = "用户名或密码错误，请重试"
 
@@ -393,7 +395,7 @@ def search():
             if conn:
                 conn.close()
 
-    return render_template("index.html", username=username, user=user_info, search_results=results, search_keyword=keyword, page_content=None)
+    return render_template("index.html", username=username, user=user_info, search_results=results, search_keyword=keyword, page_content=None, fetch_result=None, fetch_url="")
 
 
 # ── 上传头像（需要登录）──
@@ -518,6 +520,42 @@ def change_password():
     return redirect("/profile")
 
 
+# ── URL 抓取（需要登录）──
+@app.route("/fetch-url", methods=["POST"])
+@login_required
+def fetch_url():
+    url = request.form.get("url", "")
+    fetch_result = None
+    username = session.get("username")
+    user_info = get_safe_user_info(username)
+
+    if url:
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                status_code = response.status
+                content = response.read().decode("utf-8", errors="replace")
+                fetch_result = {
+                    "url": url,
+                    "status_code": status_code,
+                    "content": content[:5000]
+                }
+        except urllib.error.HTTPError as e:
+            fetch_result = {
+                "url": url,
+                "status_code": e.code,
+                "content": str(e.reason)[:5000]
+            }
+        except Exception as e:
+            fetch_result = {
+                "url": url,
+                "status_code": "ERROR",
+                "content": f"抓取失败: {str(e)}"[:5000]
+            }
+
+    return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=None, fetch_result=fetch_result, fetch_url=url)
+
+
 # ── 动态页面加载 ──
 @app.route("/page")
 def dynamic_page():
@@ -544,7 +582,7 @@ def dynamic_page():
 
     username = session.get("username")
     user_info = get_safe_user_info(username)
-    return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=page_content)
+    return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=page_content, fetch_result=None, fetch_url="")
 
 
 # ── 错误处理 ──

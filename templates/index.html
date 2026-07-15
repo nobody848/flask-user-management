@@ -8,6 +8,17 @@
     </div>
     <p style="text-align: center; margin-top: 16px;"><a href="/">返回首页</a></p>
 </div>
+{% elif fetch_result %}
+<div class="card">
+    <h2>URL 抓取结果</h2>
+    <p><strong>目标 URL：</strong>{{ fetch_result.url }}</p>
+    <p><strong>状态码：</strong>{{ fetch_result.status_code }}</p>
+    <hr>
+    <h3>响应内容（前5000字符）</h3>
+    <pre style="background: #f5f7fa; padding: 16px; border-radius: 8px; font-size: 12px; line-height: 1.6; overflow-x: auto; white-space: pre-wrap; word-break: break-all; max-height: 500px; overflow-y: auto;">{{ fetch_result.content }}</pre>
+    <hr>
+    <p style="text-align: center;"><a href="/">返回首页</a></p>
+</div>
 {% else %}
 <div class="card">
     {% if username %}
@@ -26,6 +37,17 @@
         <a href="/upload" class="btn" style="margin-top: 8px; display: inline-block;">上传头像</a>
         <a href="/profile?user_id=1" class="btn" style="margin-top: 8px; display: inline-block;">个人中心</a>
         <a href="/page?name=help" class="btn" style="margin-top: 8px; display: inline-block;">帮助中心</a>
+
+        <hr>
+        <h3>URL 抓取</h3>
+        <form action="/fetch-url" method="POST" class="fetch-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="form-group">
+                <label for="url">目标 URL</label>
+                <input type="text" id="url" name="url" placeholder="请输入 URL，如 https://example.com" value="{{ fetch_url }}" class="search-input">
+            </div>
+            <button type="submit" class="btn btn-primary">抓取</button>
+        </form>
 
         <hr>
         <h3>用户搜索</h3>
