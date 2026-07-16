@@ -86,9 +86,9 @@ def create_report():
     info.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = info.add_run(
         '项目地址：github.com/nobody848/flask-user-management\n'
-        '报告日期：2026-07-13\n'
-        '测试范围：/ping 路由命令注入漏洞\n'
-        '提交哈希：9f6c10e'
+        '报告日期：2026-07-16\n'
+        '测试范围：/ping 路由命令注入漏洞检测、修复与验证\n'
+        '修复提交：9475245'
     )
     run.font.size = Pt(12)
     run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
@@ -435,7 +435,7 @@ def ping():
 
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run('报告生成日期：2026-07-13')
+    run = p.add_run('报告生成日期：2026-07-16')
     run.font.size = Pt(10)
     run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
