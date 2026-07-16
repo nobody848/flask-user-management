@@ -654,15 +654,21 @@ def ping():
     username = session.get("username")
 
     if request.method == "POST":
-        ip = request.form.get("ip", "")
+        ip = request.form.get("ip", "").strip()
         if ip:
+            # 输入校验：仅允许合法 IP 地址或域名
+            ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+            domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$'
+            if not re.match(ip_pattern, ip) and not re.match(domain_pattern, ip):
+                result = f"输入不合法: {ip}"
+                return render_template("ping.html", username=username, result=result, ip=ip)
+
             system = platform.system().lower()
-            if system == "windows":
-                cmd = f"ping -n 3 {ip}"
-            else:
-                cmd = f"ping -c 3 {ip}"
             try:
-                output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=30)
+                if system == "windows":
+                    output = subprocess.check_output(["ping", "-n", "3", ip], stderr=subprocess.STDOUT, timeout=30)
+                else:
+                    output = subprocess.check_output(["ping", "-c", "3", ip], stderr=subprocess.STDOUT, timeout=30)
                 result = output.decode("utf-8", errors="replace")
             except subprocess.CalledProcessError as e:
                 result = e.output.decode("utf-8", errors="replace")
