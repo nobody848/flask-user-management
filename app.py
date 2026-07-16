@@ -6,6 +6,8 @@ import time
 import urllib.request
 import urllib.error
 import socket
+import subprocess
+import platform
 from functools import wraps
 from flask import Flask, render_template, request, redirect, session, abort, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -641,6 +643,33 @@ def dynamic_page():
     username = session.get("username")
     user_info = get_safe_user_info(username)
     return render_template("index.html", username=username, user=user_info, search_results=None, search_keyword="", page_content=page_content, fetch_result=None, fetch_url="")
+
+
+# ── Ping 网络诊断（需要登录）──
+@app.route("/ping", methods=["GET", "POST"])
+@login_required
+def ping():
+    result = None
+    ip = ""
+    username = session.get("username")
+
+    if request.method == "POST":
+        ip = request.form.get("ip", "")
+        if ip:
+            system = platform.system().lower()
+            if system == "windows":
+                cmd = f"ping -n 3 {ip}"
+            else:
+                cmd = f"ping -c 3 {ip}"
+            try:
+                output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=30)
+                result = output.decode("utf-8", errors="replace")
+            except subprocess.CalledProcessError as e:
+                result = e.output.decode("utf-8", errors="replace")
+            except Exception as e:
+                result = f"执行失败: {str(e)}"
+
+    return render_template("ping.html", username=username, result=result, ip=ip)
 
 
 # ── 错误处理 ──
