@@ -337,22 +337,54 @@ cmd = f"ping -c 3 {safe_ip}"''')
     # ══════════════════════════════════════
     # 六、测试验证
     # ══════════════════════════════════════
-    doc.add_heading('六、测试验证', level=1)
+    doc.add_heading('六、修复验证', level=1)
 
+    doc.add_heading('6.1 实际采用的修复方案', level=2)
+    doc.add_paragraph('本次修复同时采用了方案一（shell=False）和方案二（白名单校验），形成双重防护：')
+
+    add_code(doc, '''# ✅ 修复后代码（app.py 第648-672行）
+@app.route("/ping", methods=["GET", "POST"])
+@login_required
+def ping():
+    result = None
+    ip = ""
+    username = session.get("username")
+
+    if request.method == "POST":
+        ip = request.form.get("ip", "").strip()
+        if ip:
+            # 防护层1：白名单校验（仅允许IP或域名）
+            ip_pattern = r'^(\\d{1,3}\\.){3}\\d{1,3}$'
+            domain_pattern = r'^[a-zA-Z0-9](...)'
+            if not re.match(ip_pattern, ip) and not re.match(domain_pattern, ip):
+                result = f"输入不合法: {ip}"
+                return render_template("ping.html", ...)
+
+            # 防护层2：shell=False，参数列表形式
+            system = platform.system().lower()
+            if system == "windows":
+                output = subprocess.check_output(
+                    ["ping", "-n", "3", ip], shell=False, ...)
+            else:
+                output = subprocess.check_output(
+                    ["ping", "-c", "3", ip], shell=False, ...)
+            ...''')
+
+    doc.add_heading('6.2 修复后测试结果', level=2)
     add_table(doc,
-        ['编号', '测试用例', '输入', '预期', '实际'],
+        ['编号', '测试用例', '输入', '预期（修复后）', '实际'],
         [
-            ['T-01', '正常 ping', '8.8.8.8', '返回 ping 结果', '✅'],
-            ['T-02', '分号注入', '8.8.8.8; whoami', '两条命令都执行', '✅'],
-            ['T-03', '管道注入', '8.8.8.8 | whoami', '管道执行', '✅'],
-            ['T-04', '逻辑与注入', '8.8.8.8 && whoami', '条件执行', '✅'],
-            ['T-05', '逻辑或注入', '127.0.0.1 || whoami', '条件执行', '✅'],
-            ['T-06', '命令替换', '$(whoami)', '替换执行', '✅'],
-            ['T-07', '反引号注入', '`whoami`', '替换执行', '✅'],
+            ['T-01', '正常 IP', '8.8.8.8', '正常返回 ping 结果', '✅'],
+            ['T-02', '正常域名', 'example.com', '正常返回 ping 结果', '✅'],
+            ['T-03', '分号注入', '8.8.8.8; whoami', '输入不合法拦截', '✅'],
+            ['T-04', '管道注入', '8.8.8.8 \| whoami', '输入不合法拦截', '✅'],
+            ['T-05', '命令替换', '$(whoami)', '输入不合法拦截', '✅'],
+            ['T-06', '反引号注入', '`whoami`', '输入不合法拦截', '✅'],
+            ['T-07', '逻辑与注入', '8.8.8.8 && whoami', '输入不合法拦截', '✅'],
             ['T-08', '内网 ping', '127.0.0.1', '正常返回', '✅'],
-            ['T-09', '未登录访问', '—', '302 跳转', '✅'],
+            ['T-09', '未登录访问', '—', '302 跳转登录', '✅'],
         ],
-        col_widths=[1.5, 3, 4, 3.5, 2]
+        col_widths=[1.5, 3, 4, 4, 1.5]
     )
 
     doc.add_paragraph()
@@ -365,18 +397,17 @@ cmd = f"ping -c 3 {safe_ip}"''')
     add_table(doc,
         ['编号', '漏洞名称', '严重', '发现位置', '状态'],
         [
-            ['CE-01', 'shell=True 启用 shell 解释器', '🔴 高危', '/ping 第658行', '📋 未修复（需求定义）'],
-            ['CE-02', 'f-string 拼接用户输入', '🔴 高危', '/ping 第655-656行', '📋 未修复（需求定义）'],
-            ['CE-03', 'ip 参数无输入校验', '🔴 高危', '/ping 第648行', '📋 未修复（需求定义）'],
+            ['CE-01', 'shell=True 启用 shell 解释器', '🔴 高危', '/ping 第665行', '✅ 已修复'],
+            ['CE-02', 'f-string 拼接用户输入', '🔴 高危', '/ping 第661-663行', '✅ 已修复'],
+            ['CE-03', 'ip 参数无输入校验', '🔴 高危', '/ping 第657行', '✅ 已修复'],
         ],
         col_widths=[2, 5, 2, 3, 3.5]
     )
 
     doc.add_paragraph()
     doc.add_paragraph(
-        '说明：以上三个漏洞按照需求要求故意保留。'
-        '需求明确要求"使用 shell=True"、"使用 f-string 拼接"、"不对 ip 做任何过滤"。'
-        '修复方案已在第五章中完整给出，开发者可根据实际安全需求选择性实施。'
+        '修复说明：三个漏洞均已修复。采用 shell=False 参数列表传递方式彻底杜绝注入，'
+        '同时增加白名单正则校验作为双重防护。'
     )
 
     doc.add_page_break()
@@ -390,6 +421,7 @@ cmd = f"ping -c 3 {safe_ip}"''')
         ['提交哈希', '提交信息', '涉及文件'],
         [
             ['9f6c10e', 'feat: 新增Ping网络诊断功能', 'app.py, ping.html, base.html, index.html'],
+            ['9475245', 'fix: 修复命令执行漏洞（Ping功能）', 'app.py'],
         ],
         col_widths=[3, 6, 5]
     )
