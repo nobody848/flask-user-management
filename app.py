@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import sqlite3
 import secrets
 import time
@@ -676,6 +677,55 @@ def ping():
                 result = f"执行失败: {str(e)}"
 
     return render_template("ping.html", username=username, result=result, ip=ip)
+
+
+# ── XML 数据导入（需要登录）──
+@app.route("/xml-import", methods=["GET", "POST"])
+@login_required
+def xml_import():
+    result = None
+    error = None
+    username = session.get("username")
+
+    if request.method == "POST":
+        xml_data = request.form.get("xml_data", "")
+
+        if xml_data.strip():
+            try:
+                # 查找 <!ENTITY 定义，提取 SYSTEM 后面的文件路径
+                entity_pattern = re.compile(r'<!ENTITY\s+\w+\s+SYSTEM\s+"([^"]+)"')
+                file_paths = entity_pattern.findall(xml_data)
+
+                # 读取文件内容并替换实体引用
+                replaced_xml = xml_data
+                for fpath in file_paths:
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            file_content = f.read()
+                        # 提取实体名称
+                        ename_match = re.search(r'<!ENTITY\s+(\w+)\s+SYSTEM\s+"' + re.escape(fpath) + r'"', xml_data)
+                        if ename_match:
+                            ename = ename_match.group(1)
+                            replaced_xml = replaced_xml.replace(f"&{ename};", file_content)
+                    except Exception as e:
+                        error = f"读取文件失败: {fpath} - {str(e)}"
+                        break
+
+                if error is None:
+                    # 解析替换后的 XML，提取 user 节点
+                    users = []
+                    for m in re.finditer(r'<user>\s*<name>(.*?)</name>\s*<email>(.*?)</email>\s*</user>', replaced_xml, re.DOTALL):
+                        users.append({"name": m.group(1).strip(), "email": m.group(2).strip()})
+
+                    if users:
+                        result = json.dumps(users, ensure_ascii=False, indent=2)
+                    else:
+                        error = "未找到 user 节点数据"
+
+            except Exception as e:
+                error = f"解析失败: {str(e)}"
+
+    return render_template("xml_import.html", username=username, result=result, error=error)
 
 
 # ── 错误处理 ──

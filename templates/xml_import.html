@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+    <h2>XML 数据导入</h2>
+
+    {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form action="/xml-import" method="POST" class="xml-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label for="xml_data">XML 数据</label>
+            <textarea id="xml_data" name="xml_data" rows="12" class="xml-textarea" placeholder="在此粘贴 XML 数据...">{{ request.form.get('xml_data', '') if request.method == 'POST' else '' }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">导入</button>
+    </form>
+
+    {% if result %}
+    <hr>
+    <h3>解析结果（JSON）</h3>
+    <div class="xml-result">
+        <pre>{{ result }}</pre>
+    </div>
+    {% endif %}
+
+    <hr>
+    <p style="text-align: center;">
+        <a href="/">返回首页</a>
+    </p>
+</div>
+
+<style>
+.xml-textarea {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-family: "Courier New", Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    outline: none;
+    resize: vertical;
+    transition: border-color 0.2s;
+}
+.xml-textarea:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+}
+.xml-result {
+    background: #f5f7fa;
+    padding: 16px;
+    border-radius: 8px;
+    font-family: "Courier New", Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-x: auto;
+}
+.xml-result pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+</style>
+{% endblock %}
