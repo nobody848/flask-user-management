@@ -692,35 +692,26 @@ def xml_import():
 
         if xml_data.strip():
             try:
-                # 查找 <!ENTITY 定义，提取 SYSTEM 后面的文件路径
-                entity_pattern = re.compile(r'<!ENTITY\s+\w+\s+SYSTEM\s+"([^"]+)"')
-                file_paths = entity_pattern.findall(xml_data)
+                # XXE 防护：移除 DOCTYPE 声明及其内部子集（含 ENTITY 定义）
+                safe_xml = re.sub(r'<!DOCTYPE\s+\w+\s*\[.*?\]\s*>', '', xml_data, flags=re.DOTALL)
 
-                # 读取文件内容并替换实体引用
-                replaced_xml = xml_data
-                for fpath in file_paths:
-                    try:
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            file_content = f.read()
-                        # 提取实体名称
-                        ename_match = re.search(r'<!ENTITY\s+(\w+)\s+SYSTEM\s+"' + re.escape(fpath) + r'"', xml_data)
-                        if ename_match:
-                            ename = ename_match.group(1)
-                            replaced_xml = replaced_xml.replace(f"&{ename};", file_content)
-                    except Exception as e:
-                        error = f"读取文件失败: {fpath} - {str(e)}"
-                        break
+                # 标记是否发现并移除了 DOCTYPE（用于提示用户）
+                if safe_xml != xml_data:
+                    pass  # DOCTYPE 已被安全移除
 
-                if error is None:
-                    # 解析替换后的 XML，提取 user 节点
-                    users = []
-                    for m in re.finditer(r'<user>\s*<name>(.*?)</name>\s*<email>(.*?)</email>\s*</user>', replaced_xml, re.DOTALL):
-                        users.append({"name": m.group(1).strip(), "email": m.group(2).strip()})
+                # 解析 XML 提取 user 节点（使用正则安全提取，不加载 XML 解析器）
+                users = []
+                for m in re.finditer(r'<user>\s*<name>(.*?)</name>\s*<email>(.*?)</email>\s*</user>', safe_xml, re.DOTALL):
+                    name = m.group(1).strip()
+                    email = m.group(2).strip()
+                    # 过滤掉可能的文件内容（XXE 读取结果可能包含换行等）
+                    if not any(c in name for c in '\n\r\t') and len(name) <= 200:
+                        users.append({"name": name, "email": email})
 
-                    if users:
-                        result = json.dumps(users, ensure_ascii=False, indent=2)
-                    else:
-                        error = "未找到 user 节点数据"
+                if users:
+                    result = json.dumps(users, ensure_ascii=False, indent=2)
+                else:
+                    error = "未找到 user 节点数据"
 
             except Exception as e:
                 error = f"解析失败: {str(e)}"
